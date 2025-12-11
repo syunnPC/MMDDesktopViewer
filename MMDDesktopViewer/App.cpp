@@ -660,6 +660,7 @@ void App::OnLoadComplete(WPARAM, LPARAM lParam)
 		if (m_animator)
 		{
 			m_animator->SetModel(std::move(model));
+			m_animator->Update();
 		}
 	}
 	else

@@ -161,6 +161,12 @@ void SettingsWindow::Show()
 		m_created = true;
 	}
 
+	if (m_scrollY != 0)
+	{
+		ScrollWindowEx(m_hwnd, 0, m_scrollY, nullptr, nullptr, nullptr, nullptr,
+					   SW_INVALIDATE | SW_SCROLLCHILDREN | SW_ERASE);
+	}
+
 	m_scrollY = 0;
 	UpdateScrollInfo();
 	ScrollWindow(m_hwnd, 0, 0, nullptr, nullptr);

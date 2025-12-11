@@ -198,7 +198,6 @@ AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
 		}
 		else if (key.rfind(L"modelPreset_", 0) == 0)
 		{
-			// modelPreset_FILENAME = MODE
 			std::wstring filename = key.substr(12); // length of "modelPreset_"
 			if (!filename.empty())
 			{
