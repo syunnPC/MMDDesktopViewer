@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="MMDDesktopViewer/MMDDesktopViewer.vcxproj" />
+  <Project Path="MMDDesktopViewer/MMDDesktopViewer.vcxproj" Id="15f05791-b213-450a-826c-e8643b89aab4" />
 </Solution>
