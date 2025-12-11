@@ -135,29 +135,6 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\App.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\BinaryReader.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\BoneSolver.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\d3dx12.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\DcompRenderer.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\DebugUtil.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\Dx12Context.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\ExceptionHelper.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\FileUtil.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\MmdAnimator.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\PmxModel.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\ProgressWindow.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\Settings.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\SettingsWindow.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\TrayIcon.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\VmdMotion.hpp" />
-    <ClInclude Include="..\..\MmdDesk\MmdDesk\WicTexture.hpp" />
-    <ClInclude Include="framework.h" />
-    <ClInclude Include="MMDDesktopViewer.h" />
-    <ClInclude Include="Resource.h" />
-    <ClInclude Include="targetver.h" />
-  </ItemGroup>
-  <ItemGroup>
     <ResourceCompile Include="MMDDesktopViewer.rc" />
   </ItemGroup>
   <ItemGroup>
@@ -165,21 +142,6 @@
     <Image Include="small.ico" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\App.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\BinaryReader.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\BoneSolver.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\DcompRenderer.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\Dx12Context.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\FileUtil.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\MmdAnimator.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\PmxModel.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\ProgressWindow.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\Settings.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\SettingsWindow.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\TrayIcon.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\VmdMotion.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\WicTexture.cpp" />
-    <ClCompile Include="..\..\MmdDesk\MmdDesk\WinMain.cpp" />
     <None Include="FXAA_PS.hlsl">
       <FileType>Document</FileType>
     </None>
@@ -200,6 +162,42 @@
     <None Include="PMX_VS.hlsl">
       <FileType>Document</FileType>
     </None>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="App.cpp" />
+    <ClCompile Include="BinaryReader.cpp" />
+    <ClCompile Include="BoneSolver.cpp" />
+    <ClCompile Include="DcompRenderer.cpp" />
+    <ClCompile Include="Dx12Context.cpp" />
+    <ClCompile Include="FileUtil.cpp" />
+    <ClCompile Include="MmdAnimator.cpp" />
+    <ClCompile Include="PmxModel.cpp" />
+    <ClCompile Include="ProgressWindow.cpp" />
+    <ClCompile Include="Settings.cpp" />
+    <ClCompile Include="SettingsWindow.cpp" />
+    <ClCompile Include="TrayIcon.cpp" />
+    <ClCompile Include="VmdMotion.cpp" />
+    <ClCompile Include="WicTexture.cpp" />
+    <ClCompile Include="WinMain.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="App.hpp" />
+    <ClInclude Include="BinaryReader.hpp" />
+    <ClInclude Include="BoneSolver.hpp" />
+    <ClInclude Include="d3dx12.hpp" />
+    <ClInclude Include="DcompRenderer.hpp" />
+    <ClInclude Include="DebugUtil.hpp" />
+    <ClInclude Include="Dx12Context.hpp" />
+    <ClInclude Include="ExceptionHelper.hpp" />
+    <ClInclude Include="FileUtil.hpp" />
+    <ClInclude Include="MmdAnimator.hpp" />
+    <ClInclude Include="PmxModel.hpp" />
+    <ClInclude Include="ProgressWindow.hpp" />
+    <ClInclude Include="Settings.hpp" />
+    <ClInclude Include="SettingsWindow.hpp" />
+    <ClInclude Include="TrayIcon.hpp" />
+    <ClInclude Include="VmdMotion.hpp" />
+    <ClInclude Include="WicTexture.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

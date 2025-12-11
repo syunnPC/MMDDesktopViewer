@@ -1,0 +1,284 @@
+﻿#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
+
+#include "Settings.hpp"
+
+#include <codecvt>
+#include <fstream>
+#include <locale>
+#include <system_error>
+#include <sstream>
+
+namespace
+{
+	constexpr wchar_t kSettingsFileName[] = L"settings.ini";
+	constexpr wchar_t kPresetsDirName[] = L"Presets";
+
+	std::wstring Trim(const std::wstring& s)
+	{
+		const auto first = s.find_first_not_of(L" \t\r\n");
+		if (first == std::wstring::npos) return L"";
+		const auto last = s.find_last_not_of(L" \t\r\n");
+		return s.substr(first, last - first + 1);
+	}
+
+	void EnsureUtf8Locale(std::basic_ios<wchar_t>& s)
+	{
+		s.imbue(std::locale(std::locale::classic(), new std::codecvt_utf8<wchar_t>()));
+	}
+
+	std::filesystem::path SettingsPath(const std::filesystem::path& baseDir)
+	{
+		return baseDir / kSettingsFileName;
+	}
+
+	std::filesystem::path GetPresetPath(const std::filesystem::path& baseDir, const std::filesystem::path& modelPath)
+	{
+		if (modelPath.empty()) return {};
+		auto presetsDir = baseDir / kPresetsDirName;
+		if (!std::filesystem::exists(presetsDir))
+		{
+			std::error_code ec;
+			std::filesystem::create_directory(presetsDir, ec);
+		}
+		auto filename = modelPath.filename().wstring() + L".ini";
+		return presetsDir / filename;
+	}
+
+	float ParseFloat(const std::wstring& s, float defaultVal)
+	{
+		try
+		{
+			return std::stof(s);
+		}
+		catch (...)
+		{
+			return defaultVal;
+		}
+	}
+
+	std::wstring FloatToWString(float v)
+	{
+		std::wostringstream oss;
+		oss << v;
+		return oss.str();
+	}
+
+	int ParseInt(const std::wstring& s, int defaultVal)
+	{
+		try
+		{
+			return std::stoi(s);
+		}
+		catch (...)
+		{
+			return defaultVal;
+		}
+	}
+
+	std::wstring IntToWString(int v)
+	{
+		std::wostringstream oss;
+		oss << v;
+		return oss.str();
+	}
+
+	void ParseLightSettingLine(const std::wstring& key, const std::wstring& value, LightSettings& light)
+	{
+		if (key == L"brightness") light.brightness = ParseFloat(value, light.brightness);
+		else if (key == L"ambientStrength") light.ambientStrength = ParseFloat(value, light.ambientStrength);
+		else if (key == L"globalSaturation") light.globalSaturation = ParseFloat(value, light.globalSaturation);
+		else if (key == L"keyLightDirX") light.keyLightDirX = ParseFloat(value, light.keyLightDirX);
+		else if (key == L"keyLightDirY") light.keyLightDirY = ParseFloat(value, light.keyLightDirY);
+		else if (key == L"keyLightDirZ") light.keyLightDirZ = ParseFloat(value, light.keyLightDirZ);
+		else if (key == L"keyLightColorR") light.keyLightColorR = ParseFloat(value, light.keyLightColorR);
+		else if (key == L"keyLightColorG") light.keyLightColorG = ParseFloat(value, light.keyLightColorG);
+		else if (key == L"keyLightColorB") light.keyLightColorB = ParseFloat(value, light.keyLightColorB);
+		else if (key == L"keyLightIntensity") light.keyLightIntensity = ParseFloat(value, light.keyLightIntensity);
+		else if (key == L"fillLightDirX") light.fillLightDirX = ParseFloat(value, light.fillLightDirX);
+		else if (key == L"fillLightDirY") light.fillLightDirY = ParseFloat(value, light.fillLightDirY);
+		else if (key == L"fillLightDirZ") light.fillLightDirZ = ParseFloat(value, light.fillLightDirZ);
+		else if (key == L"fillLightColorR") light.fillLightColorR = ParseFloat(value, light.fillLightColorR);
+		else if (key == L"fillLightColorG") light.fillLightColorG = ParseFloat(value, light.fillLightColorG);
+		else if (key == L"fillLightColorB") light.fillLightColorB = ParseFloat(value, light.fillLightColorB);
+		else if (key == L"fillLightIntensity") light.fillLightIntensity = ParseFloat(value, light.fillLightIntensity);
+		else if (key == L"modelScale") light.modelScale = ParseFloat(value, light.modelScale);
+		else if (key == L"toonEnabled") light.toonEnabled = (value == L"1" || value == L"true" || value == L"True");
+		else if (key == L"toonContrast") light.toonContrast = ParseFloat(value, light.toonContrast);
+		else if (key == L"shadowHueShiftDeg") light.shadowHueShiftDeg = ParseFloat(value, light.shadowHueShiftDeg);
+		else if (key == L"shadowSaturationBoost") light.shadowSaturationBoost = ParseFloat(value, light.shadowSaturationBoost);
+		else if (key == L"shadowRampShift") light.shadowRampShift = ParseFloat(value, light.shadowRampShift);
+		else if (key == L"rimWidth") light.rimWidth = ParseFloat(value, light.rimWidth);
+		else if (key == L"rimIntensity") light.rimIntensity = ParseFloat(value, light.rimIntensity);
+		else if (key == L"specularStep") light.specularStep = ParseFloat(value, light.specularStep);
+		else if (key == L"shadowDeepThreshold") light.shadowDeepThreshold = ParseFloat(value, light.shadowDeepThreshold);
+		else if (key == L"shadowDeepSoftness") light.shadowDeepSoftness = ParseFloat(value, light.shadowDeepSoftness);
+		else if (key == L"shadowDeepMul") light.shadowDeepMul = ParseFloat(value, light.shadowDeepMul);
+		else if (key == L"faceShadowMul") light.faceShadowMul = ParseFloat(value, light.faceShadowMul);
+		else if (key == L"faceToonContrastMul") light.faceToonContrastMul = ParseFloat(value, light.faceToonContrastMul);
+	}
+
+	void WriteLightSettings(std::wostream& os, const LightSettings& light)
+	{
+		os << L"brightness=" << FloatToWString(light.brightness) << L"\n";
+		os << L"ambientStrength=" << FloatToWString(light.ambientStrength) << L"\n";
+		os << L"globalSaturation=" << FloatToWString(light.globalSaturation) << L"\n";
+		os << L"keyLightDirX=" << FloatToWString(light.keyLightDirX) << L"\n";
+		os << L"keyLightDirY=" << FloatToWString(light.keyLightDirY) << L"\n";
+		os << L"keyLightDirZ=" << FloatToWString(light.keyLightDirZ) << L"\n";
+		os << L"keyLightColorR=" << FloatToWString(light.keyLightColorR) << L"\n";
+		os << L"keyLightColorG=" << FloatToWString(light.keyLightColorG) << L"\n";
+		os << L"keyLightColorB=" << FloatToWString(light.keyLightColorB) << L"\n";
+		os << L"keyLightIntensity=" << FloatToWString(light.keyLightIntensity) << L"\n";
+		os << L"fillLightDirX=" << FloatToWString(light.fillLightDirX) << L"\n";
+		os << L"fillLightDirY=" << FloatToWString(light.fillLightDirY) << L"\n";
+		os << L"fillLightDirZ=" << FloatToWString(light.fillLightDirZ) << L"\n";
+		os << L"fillLightColorR=" << FloatToWString(light.fillLightColorR) << L"\n";
+		os << L"fillLightColorG=" << FloatToWString(light.fillLightColorG) << L"\n";
+		os << L"fillLightColorB=" << FloatToWString(light.fillLightColorB) << L"\n";
+		os << L"fillLightIntensity=" << FloatToWString(light.fillLightIntensity) << L"\n";
+		os << L"modelScale=" << FloatToWString(light.modelScale) << L"\n";
+		os << L"toonEnabled=" << (light.toonEnabled ? L"1" : L"0") << L"\n";
+		os << L"toonContrast=" << FloatToWString(light.toonContrast) << L"\n";
+		os << L"shadowHueShiftDeg=" << FloatToWString(light.shadowHueShiftDeg) << L"\n";
+		os << L"shadowSaturationBoost=" << FloatToWString(light.shadowSaturationBoost) << L"\n";
+		os << L"shadowRampShift=" << FloatToWString(light.shadowRampShift) << L"\n";
+		os << L"rimWidth=" << FloatToWString(light.rimWidth) << L"\n";
+		os << L"rimIntensity=" << FloatToWString(light.rimIntensity) << L"\n";
+		os << L"specularStep=" << FloatToWString(light.specularStep) << L"\n";
+		os << L"shadowDeepThreshold=" << FloatToWString(light.shadowDeepThreshold) << L"\n";
+		os << L"shadowDeepSoftness=" << FloatToWString(light.shadowDeepSoftness) << L"\n";
+		os << L"shadowDeepMul=" << FloatToWString(light.shadowDeepMul) << L"\n";
+		os << L"faceShadowMul=" << FloatToWString(light.faceShadowMul) << L"\n";
+		os << L"faceToonContrastMul=" << FloatToWString(light.faceToonContrastMul) << L"\n";
+	}
+}
+
+AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
+								  const std::filesystem::path& defaultModelPath)
+{
+	AppSettings settings;
+	settings.modelPath = defaultModelPath;
+	settings.alwaysOnTop = true;
+
+	const auto path = SettingsPath(baseDir);
+	if (!std::filesystem::exists(path)) return settings;
+
+	std::wifstream fin(path);
+	EnsureUtf8Locale(fin);
+	if (!fin) return settings;
+
+	std::wstring line;
+	while (std::getline(fin, line))
+	{
+		auto pos = line.find(L'=');
+		if (pos == std::wstring::npos) continue;
+		auto key = Trim(line.substr(0, pos));
+		auto value = Trim(line.substr(pos + 1));
+
+		if (key == L"model")
+		{
+			if (!value.empty()) settings.modelPath = value;
+		}
+		else if (key == L"alwaysOnTop")
+		{
+			settings.alwaysOnTop = (value == L"1" || value == L"true" || value == L"True");
+		}
+		else if (key == L"targetFps")
+		{
+			settings.targetFps = ParseInt(value, 60);
+			if (settings.targetFps < 1) settings.targetFps = 1;
+		}
+		else if (key == L"unlimitedFps")
+		{
+			settings.unlimitedFps = (value == L"1" || value == L"true" || value == L"True");
+		}
+		else if (key == L"globalPresetMode")
+		{
+			settings.globalPresetMode = static_cast<PresetMode>(ParseInt(value, 0));
+		}
+		else if (key.rfind(L"modelPreset_", 0) == 0)
+		{
+			// modelPreset_FILENAME = MODE
+			std::wstring filename = key.substr(12); // length of "modelPreset_"
+			if (!filename.empty())
+			{
+				settings.perModelPresetSettings[filename] = static_cast<PresetMode>(ParseInt(value, 0));
+			}
+		}
+		else
+		{
+			ParseLightSettingLine(key, value, settings.light);
+		}
+	}
+	return settings;
+}
+
+void SettingsManager::Save(const std::filesystem::path& baseDir,
+						   const AppSettings& settings)
+{
+	auto pathForSave = settings.modelPath;
+	if (!pathForSave.empty() && pathForSave.is_absolute())
+	{
+		std::error_code ec;
+		auto rel = std::filesystem::relative(pathForSave, baseDir, ec);
+		if (!ec) pathForSave = rel;
+	}
+
+	const auto path = SettingsPath(baseDir);
+	std::wofstream fout(path);
+	EnsureUtf8Locale(fout);
+	if (!fout) return;
+
+	fout << L"model=" << pathForSave.wstring() << L"\n";
+	fout << L"alwaysOnTop=" << (settings.alwaysOnTop ? L"1" : L"0") << L"\n";
+	fout << L"targetFps=" << IntToWString(settings.targetFps) << L"\n";
+	fout << L"unlimitedFps=" << (settings.unlimitedFps ? L"1" : L"0") << L"\n";
+	fout << L"globalPresetMode=" << IntToWString(static_cast<int>(settings.globalPresetMode)) << L"\n";
+
+	for (const auto& [name, mode] : settings.perModelPresetSettings)
+	{
+		fout << L"modelPreset_" << name << L"=" << IntToWString(static_cast<int>(mode)) << L"\n";
+	}
+
+	WriteLightSettings(fout, settings.light);
+}
+
+bool SettingsManager::HasPreset(const std::filesystem::path& baseDir, const std::filesystem::path& modelPath)
+{
+	auto path = GetPresetPath(baseDir, modelPath);
+	return !path.empty() && std::filesystem::exists(path);
+}
+
+void SettingsManager::SavePreset(const std::filesystem::path& baseDir, const std::filesystem::path& modelPath, const LightSettings& settings)
+{
+	auto path = GetPresetPath(baseDir, modelPath);
+	if (path.empty()) return;
+
+	std::wofstream fout(path);
+	EnsureUtf8Locale(fout);
+	if (!fout) return;
+
+	fout << L"; Preset for " << modelPath.filename().wstring() << L"\n";
+	WriteLightSettings(fout, settings);
+}
+
+bool SettingsManager::LoadPreset(const std::filesystem::path& baseDir, const std::filesystem::path& modelPath, LightSettings& outSettings)
+{
+	auto path = GetPresetPath(baseDir, modelPath);
+	if (path.empty() || !std::filesystem::exists(path)) return false;
+
+	std::wifstream fin(path);
+	EnsureUtf8Locale(fin);
+	if (!fin) return false;
+
+	std::wstring line;
+	while (std::getline(fin, line))
+	{
+		auto pos = line.find(L'=');
+		if (pos == std::wstring::npos) continue;
+		auto key = Trim(line.substr(0, pos));
+		auto value = Trim(line.substr(pos + 1));
+		ParseLightSettingLine(key, value, outSettings);
+	}
+	return true;
+}
