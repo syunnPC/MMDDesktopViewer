@@ -66,5 +66,4 @@ namespace WicTexture
 
 		return img;
 	}
-
-} // namespace
+}

@@ -46,6 +46,7 @@ public:
 
 	void AdjustScale(float delta);
 	void AddCameraRotation(float dxPixels, float dyPixels);
+	void AddModelOffsetPixels(float dxPixels, float dyPixels);
 	bool IsPointOnModel(const POINT& clientPoint);
 
 	void LoadTexturesForModel(const PmxModel* model,
@@ -322,4 +323,12 @@ private:
 	void CreateFxaaPipeline();
 	void CreateIntermediateResources();
 	void ReleaseIntermediateResources();
+
+	HDC m_layeredDc = nullptr;
+	HBITMAP m_layeredBmp = nullptr;
+	HGDIOBJ m_layeredOld = nullptr;
+	void* m_layeredBits = nullptr;
+
+	void RecreateLayeredBitmap();
+	void PresentLayered(UINT frameIndex);
 };

@@ -142,6 +142,7 @@
     <Image Include="small.ico" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\README.md" />
     <None Include="FXAA_PS.hlsl">
       <FileType>Document</FileType>
     </None>

@@ -3,6 +3,8 @@
 #include <memory>
 #include <filesystem>
 #include <vector>
+#include <atomic>
+#include <wrl.h>
 #include "ProgressWindow.hpp"
 #include "TrayIcon.hpp"
 #include "DcompRenderer.hpp"
@@ -10,6 +12,9 @@
 #include "Settings.hpp"
 
 class SettingsWindow;
+struct ID2D1Factory;
+struct ID2D1HwndRenderTarget;
+struct ID2D1SolidColorBrush;
 
 class App
 {
@@ -51,6 +56,11 @@ private:
 
 	void CreateHiddenMessageWindow();
 	void CreateRenderWindow();
+	void CreateGizmoWindow();
+	void ToggleGizmoWindow();
+	void PositionGizmoWindow();
+	void EnsureGizmoD2D();
+	void RenderGizmo();
 	void InitRenderer();
 	void InitTray();
 	void InitAnimator();
@@ -68,6 +78,7 @@ private:
 	HINSTANCE m_hInst{};
 	HWND m_msgWnd{};
 	HWND m_renderWnd{};
+	HWND m_gizmoWnd{};
 
 	std::unique_ptr<TrayIcon> m_tray;
 	std::unique_ptr<SettingsWindow> m_settings;
@@ -87,6 +98,16 @@ private:
 
 	bool m_comInitialized{ false };
 
+	bool m_gizmoVisible{ false };
+	bool m_gizmoLeftDrag{ false };
+	bool m_gizmoRightDrag{ false };
+	POINT m_gizmoLastCursor{};
+
+	Microsoft::WRL::ComPtr<ID2D1Factory> m_d2dFactory;
+	Microsoft::WRL::ComPtr<ID2D1HwndRenderTarget> m_gizmoRt;
+	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_gizmoBrushFill;
+	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_gizmoBrushStroke;
+
 	bool m_draggingWindow{ false };
 	POINT m_dragStartCursor{};
 	POINT m_dragStartWindowPos{};
@@ -105,4 +126,13 @@ private:
 
 	void StartLoadingModel(const std::filesystem::path& path);
 	void OnLoadComplete(WPARAM wParam, LPARAM lParam);
+
+	WNDPROC m_prevRenderWndProc = nullptr;
+
+	static LRESULT CALLBACK RenderClickThroughProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+	void InstallRenderClickThrough();
+
+	void ForceRenderTreeClickThrough();
+	static BOOL CALLBACK EnumChildForClickThrough(HWND hWnd, LPARAM lParam);
+	static void MakeClickThrough(HWND hWnd);
 };

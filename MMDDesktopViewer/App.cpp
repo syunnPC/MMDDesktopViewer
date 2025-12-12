@@ -16,6 +16,9 @@
 #include <dwmapi.h>
 #pragma comment(lib, "dwmapi.lib")
 
+#include <d2d1.h>
+#pragma comment(lib, "d2d1.lib")
+
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
@@ -24,9 +27,17 @@ namespace
 {
 	constexpr wchar_t kMsgClassName[] = L"MMDDesk.MsgWindow";
 	constexpr wchar_t kRenderClassName[] = L"MMDDesk.RenderWindow";
+	constexpr wchar_t kGizmoClassName[] = L"MMDDesk.GizmoWindow";
 
 	constexpr UINT_PTR kTimerId = 1;
 	constexpr UINT kDefaultTimerMs = 16;
+
+	constexpr int kGizmoSizePx = 140;
+	constexpr int kGizmoMarginPx = 16;
+
+	constexpr int kHotKeyToggleGizmoId = 1;
+	constexpr UINT kHotKeyToggleGizmoMods = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+	constexpr UINT kHotKeyToggleGizmoVk = 'G';
 
 	enum TrayCmd : UINT
 	{
@@ -40,7 +51,7 @@ namespace
 
 	DWORD GetWindowStyleExForRender()
 	{
-		return WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP;
+		return WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
 	}
 
 	DWORD GetWindowStyleForRender()
@@ -83,6 +94,11 @@ App::App(HINSTANCE hInst) : m_hInst(hInst)
 
 	CreateHiddenMessageWindow();
 	CreateRenderWindow();
+	if (!RegisterHotKey(m_renderWnd, kHotKeyToggleGizmoId, kHotKeyToggleGizmoMods, kHotKeyToggleGizmoVk))
+	{
+		OutputDebugStringA("RegisterHotKey failed (Ctrl+Alt+G).\n");
+	}
+	CreateGizmoWindow();
 
 	ApplyTopmost();
 
@@ -90,7 +106,7 @@ App::App(HINSTANCE hInst) : m_hInst(hInst)
 	InitAnimator();
 
 	BuildTrayMenu();
-	InitTray(); 
+	InitTray();
 
 	UpdateTimerInterval();
 }
@@ -99,6 +115,8 @@ App::~App()
 {
 	if (m_trayMenu) DestroyMenu(m_trayMenu);
 	if (m_msgWnd) KillTimer(m_msgWnd, kTimerId);
+	if (m_renderWnd) UnregisterHotKey(m_renderWnd, kHotKeyToggleGizmoId);
+	if (m_gizmoWnd) DestroyWindow(m_gizmoWnd);
 	if (m_comInitialized)
 	{
 		CoUninitialize();
@@ -318,6 +336,12 @@ void App::OnTimer()
 	{
 		m_renderer->Render(*m_animator);
 	}
+
+	if (m_gizmoVisible && m_gizmoWnd)
+	{
+		PositionGizmoWindow();
+		InvalidateRect(m_gizmoWnd, nullptr, FALSE);
+	}
 }
 
 void App::CreateHiddenMessageWindow()
@@ -382,6 +406,177 @@ void App::CreateRenderWindow()
 	ShowWindow(m_renderWnd, SW_SHOWNOACTIVATE);
 }
 
+void App::CreateGizmoWindow()
+{
+	WNDCLASSEXW wc{};
+	wc.cbSize = sizeof(wc);
+	wc.lpfnWndProc = WndProcThunk;
+	wc.hInstance = m_hInst;
+	wc.lpszClassName = kGizmoClassName;
+	wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+	wc.hbrBackground = nullptr;
+
+	// 既に登録済みなら成功扱い
+	if (!RegisterClassExW(&wc))
+	{
+		const DWORD err = GetLastError();
+		if (err != ERROR_CLASS_ALREADY_EXISTS)
+		{
+			throw std::runtime_error("RegisterClassExW (GizmoWindow) failed.");
+		}
+	}
+
+	// 入力を受ける UI ウィンドウ（円形）
+	const DWORD exStyle = WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_LAYERED;
+	const DWORD style = WS_POPUP;
+
+	m_gizmoWnd = CreateWindowExW(
+		exStyle,
+		kGizmoClassName,
+		L"MMDDesk Gizmo",
+		style,
+		0, 0, kGizmoSizePx, kGizmoSizePx,
+		nullptr, nullptr, m_hInst, this);
+
+	if (!m_gizmoWnd)
+	{
+		throw std::runtime_error("CreateWindowExW (GizmoWindow) failed.");
+	}
+
+	// 円形にする（ウィンドウ領域を楕円で設定）
+	HRGN rgn = CreateEllipticRgn(0, 0, kGizmoSizePx, kGizmoSizePx);
+	SetWindowRgn(m_gizmoWnd, rgn, TRUE);
+
+	ShowWindow(m_gizmoWnd, SW_HIDE);
+	SetLayeredWindowAttributes(m_gizmoWnd, 0, 180, LWA_ALPHA);
+}
+
+void App::ToggleGizmoWindow()
+{
+	if (!m_gizmoWnd) return;
+
+	if (m_gizmoVisible)
+	{
+		m_gizmoVisible = false;
+		m_gizmoLeftDrag = false;
+		m_gizmoRightDrag = false;
+		ReleaseCapture();
+		ShowWindow(m_gizmoWnd, SW_HIDE);
+		return;
+	}
+
+	m_gizmoVisible = true;
+	PositionGizmoWindow();
+	ShowWindow(m_gizmoWnd, SW_SHOWNOACTIVATE);
+	InvalidateRect(m_gizmoWnd, nullptr, FALSE);
+}
+
+void App::PositionGizmoWindow()
+{
+	if (!m_gizmoWnd || !m_renderWnd) return;
+
+	RECT rc{};
+	GetWindowRect(m_renderWnd, &rc);
+
+	const int w = rc.right - rc.left;
+	const int h = rc.bottom - rc.top;
+
+	const int x = rc.left + (w - kGizmoSizePx) / 2;
+	const int y = rc.top + (h - kGizmoSizePx) / 2;
+
+	HWND insertAfter = m_settingsData.alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST;
+	SetWindowPos(
+		m_gizmoWnd,
+		insertAfter,
+		x,
+		y,
+		kGizmoSizePx,
+		kGizmoSizePx,
+		SWP_NOACTIVATE);
+}
+
+void App::EnsureGizmoD2D()
+{
+	if (!m_gizmoWnd) return;
+
+	if (!m_d2dFactory)
+	{
+		HRESULT hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, m_d2dFactory.GetAddressOf());
+		if (FAILED(hr))
+		{
+			throw std::runtime_error("D2D1CreateFactory failed.");
+		}
+	}
+
+	RECT rc{};
+	GetClientRect(m_gizmoWnd, &rc);
+	const UINT w = static_cast<UINT>(std::max(1L, rc.right - rc.left));
+	const UINT h = static_cast<UINT>(std::max(1L, rc.bottom - rc.top));
+
+	if (!m_gizmoRt)
+	{
+		D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps = D2D1::HwndRenderTargetProperties(
+			m_gizmoWnd,
+			D2D1::SizeU(w, h),
+			D2D1_PRESENT_OPTIONS_IMMEDIATELY);
+
+		HRESULT hr = m_d2dFactory->CreateHwndRenderTarget(
+			D2D1::RenderTargetProperties(),
+			hwndProps,
+			m_gizmoRt.GetAddressOf());
+		if (FAILED(hr))
+		{
+			throw std::runtime_error("CreateHwndRenderTarget failed.");
+		}
+
+		m_gizmoRt->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
+		m_gizmoRt->CreateSolidColorBrush(D2D1::ColorF(0.08f, 0.08f, 0.08f), m_gizmoBrushFill.GetAddressOf());
+		m_gizmoRt->CreateSolidColorBrush(D2D1::ColorF(0.85f, 0.85f, 0.85f), m_gizmoBrushStroke.GetAddressOf());
+	}
+	else
+	{
+		auto cur = m_gizmoRt->GetSize();
+		if (static_cast<UINT>(cur.width) != w || static_cast<UINT>(cur.height) != h)
+		{
+			m_gizmoRt->Resize(D2D1::SizeU(w, h));
+		}
+	}
+}
+
+void App::RenderGizmo()
+{
+	if (!m_gizmoVisible || !m_gizmoWnd) return;
+	EnsureGizmoD2D();
+	if (!m_gizmoRt) return;
+
+	const D2D1_SIZE_F size = m_gizmoRt->GetSize();
+	const float cx = size.width * 0.5f;
+	const float cy = size.height * 0.5f;
+	const float radius = (std::min)(size.width, size.height) * 0.5f - 10.0f;
+
+	m_gizmoRt->BeginDraw();
+	// 背景
+	m_gizmoRt->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f));
+
+	D2D1_ELLIPSE el = D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius);
+	m_gizmoRt->FillEllipse(el, m_gizmoBrushFill.Get());
+	m_gizmoRt->DrawEllipse(el, m_gizmoBrushStroke.Get(), 3.0f);
+
+	// 目印（十字）
+	const float tick = radius * 0.55f;
+	m_gizmoRt->DrawLine(D2D1::Point2F(cx - tick, cy), D2D1::Point2F(cx + tick, cy), m_gizmoBrushStroke.Get(), 1.5f);
+	m_gizmoRt->DrawLine(D2D1::Point2F(cx, cy - tick), D2D1::Point2F(cx, cy + tick), m_gizmoBrushStroke.Get(), 1.5f);
+
+	HRESULT hr = m_gizmoRt->EndDraw();
+	if (hr == D2DERR_RECREATE_TARGET)
+	{
+		m_gizmoRt.Reset();
+		m_gizmoBrushFill.Reset();
+		m_gizmoBrushStroke.Reset();
+	}
+}
+
 void App::InitRenderer()
 {
 	if (!m_progress)
@@ -405,6 +600,9 @@ void App::InitRenderer()
 	m_renderer = std::make_unique<DcompRenderer>();
 	m_renderer->Initialize(m_renderWnd, onProgress);
 
+	InstallRenderClickThrough();
+	ForceRenderTreeClickThrough();
+
 	// 保存されたライト設定を適用
 	m_renderer->SetLightSettings(m_settingsData.light);
 
@@ -412,6 +610,78 @@ void App::InitRenderer()
 	{
 		m_progress->Hide();
 	}
+}
+
+void App::MakeClickThrough(HWND hWnd)
+{
+	if (!hWnd) return;
+
+	EnableWindow(hWnd, FALSE);
+
+	LONG_PTR ex = GetWindowLongPtrW(hWnd, GWL_EXSTYLE);
+	ex |= (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE);
+	SetWindowLongPtrW(hWnd, GWL_EXSTYLE, ex);
+
+	SetWindowPos(hWnd, nullptr, 0, 0, 0, 0,
+				 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+BOOL CALLBACK App::EnumChildForClickThrough(HWND hWnd, LPARAM lParam)
+{
+	MakeClickThrough(hWnd);
+	return TRUE;
+}
+
+void App::ForceRenderTreeClickThrough()
+{
+	// render 本体
+	MakeClickThrough(m_renderWnd);
+	EnumChildWindows(m_renderWnd, &App::EnumChildForClickThrough, 0);
+}
+
+
+void App::InstallRenderClickThrough()
+{
+	if (!m_renderWnd) return;
+
+	LONG_PTR ex = GetWindowLongPtrW(m_renderWnd, GWL_EXSTYLE);
+	ex |= (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE);
+	SetWindowLongPtrW(m_renderWnd, GWL_EXSTYLE, ex);
+
+	SetWindowPos(
+		m_renderWnd, nullptr, 0, 0, 0, 0,
+		SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+
+	if (!m_prevRenderWndProc)
+	{
+		m_prevRenderWndProc = reinterpret_cast<WNDPROC>(
+			SetWindowLongPtrW(
+				m_renderWnd,
+				GWLP_WNDPROC,
+				reinterpret_cast<LONG_PTR>(&App::RenderClickThroughProc)));
+	}
+}
+
+LRESULT CALLBACK App::RenderClickThroughProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	// GWLP_USERDATA は WndProcThunk が設定済み :contentReference[oaicite:3]{index=3}
+	App* self = reinterpret_cast<App*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+
+	switch (msg)
+	{
+		case WM_NCHITTEST:
+			return HTTRANSPARENT;
+		case WM_MOUSEACTIVATE:
+			return MA_NOACTIVATE; 
+		default:
+			break;
+	}
+
+	if (self && self->m_prevRenderWndProc)
+	{
+		return CallWindowProcW(self->m_prevRenderWndProc, hWnd, msg, wParam, lParam);
+	}
+	return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
 void App::InitAnimator()
@@ -497,6 +767,11 @@ void App::ApplyTopmost() const
 	HWND insertAfter = m_settingsData.alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST;
 	SetWindowPos(m_renderWnd, insertAfter, 0, 0, 0, 0,
 				 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+	if (m_gizmoWnd)
+	{
+		SetWindowPos(m_gizmoWnd, insertAfter, 0, 0, 0, 0,
+					 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+	}
 }
 
 UINT App::ComputeTimerIntervalMs() const
@@ -622,7 +897,7 @@ void App::OnTrayCommand(UINT id)
 
 void App::OnMouseWheel(HWND hWnd, int delta, WPARAM)
 {
-	if (hWnd != m_renderWnd) return;
+	if (hWnd != m_gizmoWnd) return;
 
 	bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
 	bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -645,6 +920,16 @@ void App::OnMouseWheel(HWND hWnd, int delta, WPARAM)
 		{
 			m_renderer->AdjustBrightness(adjustment);
 			m_settingsData.light = m_renderer->GetLightSettings();
+		}
+	}
+	else
+	{
+		// 通常ホイール: 回転（ヨー）
+		const float steps = static_cast<float>(delta) / static_cast<float>(WHEEL_DELTA);
+		const float pseudoDx = steps * 12.0f; // AddCameraRotation は「ピクセル差分」相当で受け取る
+		if (m_renderer)
+		{
+			m_renderer->AddCameraRotation(pseudoDx, 0.0f);
 		}
 	}
 }
@@ -729,110 +1014,122 @@ LRESULT App::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 			OnTrayCommand(LOWORD(wParam));
 			return 0;
 
-		case WM_NCHITTEST:
-			if (hWnd == m_renderWnd && m_renderer)
+		case WM_HOTKEY:
+			if (wParam == kHotKeyToggleGizmoId)
 			{
-				// マウス座標（スクリーン座標）を取得
-				POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-
-				// クライアント座標に変換して判定
-				POINT ptClient = pt;
-				ScreenToClient(hWnd, &ptClient);
-
-				// モデル上なら「クライアント領域」として自分のイベントにする
-				if (m_renderer->IsPointOnModel(ptClient))
-				{
-					return HTCLIENT;
-				}
-
-				// 透明部分なら「透過」として下のウィンドウへイベントを流す
-				return HTTRANSPARENT;
+				ToggleGizmoWindow();
+				return 0;
 			}
 			break;
 
+		case WM_NCHITTEST:
+			break;
+
 		case WM_LBUTTONDOWN:
-			if (hWnd == m_renderWnd)
+			if (hWnd == m_gizmoWnd)
 			{
-				// ウィンドウ移動の開始
-				m_draggingWindow = true;
+				m_gizmoLeftDrag = true;
+				m_gizmoRightDrag = false;
 				SetCapture(hWnd);
-				GetCursorPos(&m_dragStartCursor);
-				RECT rc; GetWindowRect(hWnd, &rc);
-				m_dragStartWindowPos = { rc.left, rc.top };
+				GetCursorPos(&m_gizmoLastCursor);
 				return 0;
 			}
 			break;
 
 		case WM_RBUTTONDOWN:
-			if (hWnd == m_renderWnd && m_renderer)
+			if (hWnd == m_gizmoWnd)
 			{
-				POINT pt; GetCursorPos(&pt);
-				// モデル回転の開始
-				m_rotatingModel = true;
+				m_gizmoRightDrag = true;
+				m_gizmoLeftDrag = false;
 				SetCapture(hWnd);
-				m_rotateLastCursor = pt;
+				GetCursorPos(&m_gizmoLastCursor);
 				return 0;
 			}
 			break;
 
 		case WM_MOUSEMOVE:
 		{
-			if (hWnd == m_renderWnd)
+			if (hWnd == m_gizmoWnd && (m_gizmoLeftDrag || m_gizmoRightDrag))
 			{
-				if (m_draggingWindow)
-				{
-					POINT cursorNow;
-					GetCursorPos(&cursorNow);
-					const int dx = cursorNow.x - m_dragStartCursor.x;
-					const int dy = cursorNow.y - m_dragStartCursor.y;
+				POINT cursorNow{};
+				GetCursorPos(&cursorNow);
+				const int dx = cursorNow.x - m_gizmoLastCursor.x;
+				const int dy = cursorNow.y - m_gizmoLastCursor.y;
+				m_gizmoLastCursor = cursorNow;
 
-					SetWindowPos(
-						m_renderWnd, nullptr,
-						m_dragStartWindowPos.x + dx,
-						m_dragStartWindowPos.y + dy,
-						0, 0,
-						SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
-					);
-					return 0;
-				}
-				else if (m_rotatingModel)
+				if (m_renderer)
 				{
-					POINT cursorNow;
-					GetCursorPos(&cursorNow);
-					const int dx = cursorNow.x - m_rotateLastCursor.x;
-					const int dy = cursorNow.y - m_rotateLastCursor.y;
-					if (m_renderer)
+					if (m_gizmoLeftDrag)
 					{
+						if (m_renderWnd)
+						{
+							RECT rc{};
+							GetWindowRect(m_renderWnd, &rc);
+							const int newX = rc.left + dx;
+							const int newY = rc.top + dy;
+							SetWindowPos( m_renderWnd, nullptr, newX, newY,
+								0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+						
+							if (m_gizmoVisible && m_gizmoWnd)
+							{
+								PositionGizmoWindow();
+							}
+						}
+					}
+					else if (m_gizmoRightDrag)
+					{
+						// 右ドラッグ: 回転
 						m_renderer->AddCameraRotation((float)dx, (float)dy);
 					}
-					m_rotateLastCursor = cursorNow;
-					return 0;
 				}
+
+				InvalidateRect(hWnd, nullptr, FALSE);
+				return 0;
 			}
 			break;
 		}
 
 		case WM_RBUTTONUP:
-		case WM_CAPTURECHANGED:
-			if (hWnd == m_renderWnd && m_rotatingModel)
+			if (hWnd == m_gizmoWnd && m_gizmoRightDrag)
 			{
-				m_rotatingModel = false;
-				ReleaseCapture();
-				return 0;
-			}
-			if (hWnd == m_renderWnd && m_draggingWindow)
-			{
-				m_draggingWindow = false;
+				m_gizmoRightDrag = false;
 				ReleaseCapture();
 				return 0;
 			}
 			break;
 
 		case WM_LBUTTONUP:
-			if (hWnd == m_renderWnd && m_draggingWindow)
+			if (hWnd == m_gizmoWnd && m_gizmoLeftDrag)
 			{
-				m_draggingWindow = false;
+				m_gizmoLeftDrag = false;
 				ReleaseCapture();
+				return 0;
+			}
+			break;
+
+		case WM_CAPTURECHANGED:
+			if (hWnd == m_gizmoWnd)
+			{
+				m_gizmoLeftDrag = false;
+				m_gizmoRightDrag = false;
+				return 0;
+			}
+			break;
+
+		case WM_ERASEBKGND:
+			if (hWnd == m_gizmoWnd)
+			{
+				return 1;
+			}
+			break;
+
+		case WM_PAINT:
+			if (hWnd == m_gizmoWnd)
+			{
+				PAINTSTRUCT ps{};
+				BeginPaint(hWnd, &ps);
+				RenderGizmo();
+				EndPaint(hWnd, &ps);
 				return 0;
 			}
 			break;
@@ -852,10 +1149,10 @@ LRESULT App::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 		case WM_CANCELMODE:
 		case WM_KILLFOCUS:
 		case WM_ACTIVATEAPP:
-			if (hWnd == m_renderWnd)
+			if (hWnd == m_gizmoWnd)
 			{
-				m_draggingWindow = false;
-				m_rotatingModel = false;
+				m_gizmoLeftDrag = false;
+				m_gizmoRightDrag = false;
 				ReleaseCapture();
 			}
 			break;

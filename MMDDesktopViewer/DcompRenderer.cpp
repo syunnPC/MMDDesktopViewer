@@ -198,6 +198,115 @@ namespace
 	}
 }
 
+static inline uint8_t To8_10(uint32_t v10)
+{
+	// 0..1023 -> 0..255（丸め込み）
+	return static_cast<uint8_t>((v10 * 255u + 511u) / 1023u);
+}
+static inline uint8_t To8_2(uint32_t v2)
+{
+	// 0..3 -> 0..255
+	return static_cast<uint8_t>((v2 * 255u + 1u) / 3u);
+}
+
+void DcompRenderer::RecreateLayeredBitmap()
+{
+	if (m_width == 0 || m_height == 0) return;
+
+	if (!m_layeredDc)
+	{
+		m_layeredDc = CreateCompatibleDC(nullptr);
+		if (!m_layeredDc) throw std::runtime_error("CreateCompatibleDC failed.");
+	}
+
+	// 古いのを外す
+	if (m_layeredBmp)
+	{
+		if (m_layeredOld)
+		{
+			SelectObject(m_layeredDc, m_layeredOld);
+			m_layeredOld = nullptr;
+		}
+		DeleteObject(m_layeredBmp);
+		m_layeredBmp = nullptr;
+		m_layeredBits = nullptr;
+	}
+
+	BITMAPINFO bmi{};
+	bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	bmi.bmiHeader.biWidth = static_cast<LONG>(m_width);
+	bmi.bmiHeader.biHeight = -static_cast<LONG>(m_height); // top-down
+	bmi.bmiHeader.biPlanes = 1;
+	bmi.bmiHeader.biBitCount = 32;
+	bmi.bmiHeader.biCompression = BI_RGB;
+
+	void* bits = nullptr;
+	HBITMAP bmp = CreateDIBSection(m_layeredDc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+	if (!bmp || !bits) throw std::runtime_error("CreateDIBSection failed.");
+
+	m_layeredOld = SelectObject(m_layeredDc, bmp);
+	m_layeredBmp = bmp;
+	m_layeredBits = bits;
+
+	// 初期は透明で埋める
+	memset(m_layeredBits, 0, static_cast<size_t>(m_width) * static_cast<size_t>(m_height) * 4u);
+}
+
+void DcompRenderer::PresentLayered(UINT frameIndex)
+{
+	if (!m_layeredDc || !m_layeredBmp || !m_layeredBits) return;
+	if (!m_readbackMapped[frameIndex]) return;
+
+	// readback は R10G10B10A2（4byte/pixel）。RowPitch は footprint に従う
+	const uint8_t* srcBase = reinterpret_cast<const uint8_t*>(m_readbackMapped[frameIndex]);
+	const UINT srcPitch = m_readbackFootprint.Footprint.RowPitch;
+
+	uint8_t* dstBase = reinterpret_cast<uint8_t*>(m_layeredBits);
+	const UINT dstPitch = static_cast<UINT>(m_width) * 4u;
+
+	for (UINT y = 0; y < m_height; ++y)
+	{
+		const uint32_t* src = reinterpret_cast<const uint32_t*>(srcBase + y * srcPitch);
+		uint32_t* dst = reinterpret_cast<uint32_t*>(dstBase + y * dstPitch);
+
+		for (UINT x = 0; x < m_width; ++x)
+		{
+			const uint32_t p = src[x];
+			const uint32_t r10 = (p >> 0) & 0x3FFu;
+			const uint32_t g10 = (p >> 10) & 0x3FFu;
+			const uint32_t b10 = (p >> 20) & 0x3FFu;
+			const uint32_t a2 = (p >> 30) & 0x3u;
+
+			const uint8_t a8 = To8_2(a2);
+			const uint8_t r8 = (a2 == 0) ? 0 : To8_10(r10);
+			const uint8_t g8 = (a2 == 0) ? 0 : To8_10(g10);
+			const uint8_t b8 = (a2 == 0) ? 0 : To8_10(b10);
+
+			// DIB は BGRA（メモリ上の並び B,G,R,A）
+			dst[x] = (uint32_t)b8 | ((uint32_t)g8 << 8) | ((uint32_t)r8 << 16) | ((uint32_t)a8 << 24);
+		}
+	}
+
+	RECT rc{};
+	GetWindowRect(m_hwnd, &rc);
+
+	POINT ptDst{ rc.left, rc.top };
+	SIZE  size{ (LONG)m_width, (LONG)m_height };
+	POINT ptSrc{ 0, 0 };
+
+	BLENDFUNCTION bf{};
+	bf.BlendOp = AC_SRC_OVER;
+	bf.SourceConstantAlpha = 255;
+	bf.AlphaFormat = AC_SRC_ALPHA;
+
+	// これが「黒背景を消す」本体
+	if (!UpdateLayeredWindow(m_hwnd, nullptr, &ptDst, &size, m_layeredDc, &ptSrc, 0, &bf, ULW_ALPHA))
+	{
+		// 必要なら GetLastError() をログ
+	}
+}
+
+
 void DcompRenderer::UpdateMaterialSettings()
 {
 	if (!m_pmx.ready || !m_materialCbMapped) return;
@@ -308,7 +417,7 @@ void DcompRenderer::Initialize(HWND hwnd, ProgressCallback progress)
 
 	CreateReadbackBuffers();
 
-	CreateDComp();
+	RecreateLayeredBitmap();
 
 	ReportProgress(0.30f, L"テクスチャ用のリソースを初期化しています...");
 	CreateSrvHeap();
@@ -605,7 +714,7 @@ void DcompRenderer::ResizeIfNeeded()
 
 	CreateIntermediateResources();
 
-	m_dcompDevice->Commit();
+	RecreateLayeredBitmap();
 }
 
 // 0 = 自動ウィンドウリサイズしない
@@ -1086,6 +1195,9 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	const UINT64 signalValue = m_fenceValue++;
 	m_ctx.Queue()->Signal(m_fence.Get(), signalValue);
 	m_frameFenceValues[frameIndex] = signalValue;
+
+	WaitForFrame(frameIndex);
+	PresentLayered(frameIndex); 
 }
 
 void DcompRenderer::UpdateBoneMatrices(const MmdAnimator& animator, UINT frameIndex)
@@ -2112,6 +2224,22 @@ void DcompRenderer::AddCameraRotation(float dxPixels, float dyPixels)
 
 	const float limit = DirectX::XM_PIDIV2 - 0.05f;
 	m_cameraPitch = std::clamp(m_cameraPitch, -limit, limit);
+}
+
+void DcompRenderer::AddModelOffsetPixels(float dxPixels, float dyPixels)
+{
+	// 画面上のドラッグ量（ピクセル）を、モデル座標系の平行移動に変換する。
+	// モデルは Render() 内でスケール済み（だいたい画面内に収まる大きさ）なので、
+	// ここでは「ウィンドウ短辺 = 1.0」程度の感度にしておく。
+	const float w = (float)std::max<UINT>(1, m_width);
+	const float h = (float)std::max<UINT>(1, m_height);
+	const float denom = (std::min)(w, h);
+	const float base = 1.0f / denom;
+	const float invScale = 1.0f / std::max(0.001f, m_lightSettings.modelScale);
+
+	m_modelOffset.x += dxPixels * base * invScale;
+	// 画面Yは下向きが正なので反転
+	m_modelOffset.y -= dyPixels * base * invScale;
 }
 
 bool DcompRenderer::IsPointOnModel(const POINT& clientPoint)
