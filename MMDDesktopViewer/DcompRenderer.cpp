@@ -17,6 +17,7 @@
 #include <optional>
 #include <cstring>
 #include <utility>
+#include <array>
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -299,13 +300,11 @@ void DcompRenderer::PresentLayered(UINT frameIndex)
 	bf.SourceConstantAlpha = 255;
 	bf.AlphaFormat = AC_SRC_ALPHA;
 
-	// これが「黒背景を消す」本体
 	if (!UpdateLayeredWindow(m_hwnd, nullptr, &ptDst, &size, m_layeredDc, &ptSrc, 0, &bf, ULW_ALPHA))
 	{
 		// 必要なら GetLastError() をログ
 	}
 }
-
 
 void DcompRenderer::UpdateMaterialSettings()
 {
@@ -1729,13 +1728,44 @@ static float Lanczos(float x, float a = 3.0f)
 	return (a * std::sin(pi_x) * std::sin(pi_x / a)) / (pi_x * pi_x);
 }
 
-static std::vector<std::vector<uint8_t>>
-BuildMipChainRGBA(const uint8_t* src, uint32_t w, uint32_t h)
+static std::vector<std::vector<uint8_t>> BuildMipChainRGBA(const uint8_t* src, uint32_t w, uint32_t h)
 {
-	std::vector<std::vector<uint8_t>> mips;
+	static constexpr int kRadius = 3;
+	static constexpr int kTaps = kRadius * 2; // 6
 
-	std::vector<uint8_t> level0(src, src + (size_t)w * h * 4);
-	mips.push_back(std::move(level0));
+	// 8-bit -> linear (gamma 2.2) / 8-bit -> [0,1] をLUT化（元コードのpow結果をfloat化した値と一致）
+	static const std::array<float, 256> kToLinear = [] {
+		std::array<float, 256> t{};
+		for (int i = 0; i < 256; ++i)
+		{
+			const float v = (float)i / 255.0f;
+			t[i] = std::pow(v, 2.2f);
+		}
+		return t;
+		}();
+	static const std::array<float, 256> kToNorm = [] {
+		std::array<float, 256> t{};
+		for (int i = 0; i < 256; ++i) t[i] = (float)i / 255.0f;
+		return t;
+		}();
+
+	auto clampi = [](int v, int lo, int hi) -> int {
+		return (v < lo) ? lo : (v > hi ? hi : v);
+		};
+
+	// mip数を先に見積もってreserve（再確保回避）
+	uint32_t levels = 1;
+	for (uint32_t tw = w, th = h; tw > 1 || th > 1; )
+	{
+		tw = std::max(1u, tw / 2);
+		th = std::max(1u, th / 2);
+		++levels;
+	}
+
+	std::vector<std::vector<uint8_t>> mips;
+	mips.reserve(levels);
+
+	mips.emplace_back(src, src + (size_t)w * h * 4);
 
 	uint32_t cw = w, ch = h;
 
@@ -1745,67 +1775,108 @@ BuildMipChainRGBA(const uint8_t* src, uint32_t w, uint32_t h)
 		const uint32_t nh = std::max(1u, ch / 2);
 
 		std::vector<uint8_t> next((size_t)nw * nh * 4);
-		const auto& prev = mips.back();
 
-		const int radius = 3;
+		const auto& prevVec = mips.back();
+		const uint8_t* prev = prevVec.data();
+		uint8_t* dst = next.data();
 
-		for (uint32_t y = 0; y < nh; ++y)
+		const float scaleX = (float)cw / (float)nw;
+		const float scaleY = (float)ch / (float)nh;
+		static constexpr float kInvGamma = 1.0f / 2.2f;
+
+		// x方向は各y行で再利用されるので、px/wxを前計算（Lanczos呼び出し削減）
+		std::vector<std::array<int, kTaps>> pxTable(nw);
+		std::vector<std::array<float, kTaps>> wxTable(nw);
+
+		for (uint32_t x = 0; x < nw; ++x)
 		{
+			const float centerX = (x + 0.5f) * scaleX - 0.5f;
+			const int startX = (int)std::floor(centerX) - kRadius + 1;
+
+			auto& pxA = pxTable[x];
+			auto& wxA = wxTable[x];
+
+			for (int kx = 0; kx < kTaps; ++kx)
+			{
+				const int px = clampi(startX + kx, 0, (int)cw - 1);
+				pxA[kx] = px;
+				wxA[kx] = Lanczos(centerX - (float)px);
+			}
+		}
+
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static)
+#endif
+		for (int yi = 0; yi < (int)nh; ++yi)
+		{
+			const uint32_t y = (uint32_t)yi;
+
+			// y方向はこのy行でだけ使うので、py/wy/rowBaseを行単位で前計算
+			std::array<int, kTaps> pyA{};
+			std::array<float, kTaps> wyA{};
+			std::array<size_t, kTaps> rowBaseA{};
+
+			const float centerY = (y + 0.5f) * scaleY - 0.5f;
+			const int startY = (int)std::floor(centerY) - kRadius + 1;
+
+			for (int ky = 0; ky < kTaps; ++ky)
+			{
+				const int py = clampi(startY + ky, 0, (int)ch - 1);
+				pyA[ky] = py;
+				wyA[ky] = Lanczos(centerY - (float)py);
+				rowBaseA[ky] = (size_t)py * (size_t)cw * 4;
+			}
+
 			for (uint32_t x = 0; x < nw; ++x)
 			{
-				float centerX = (x + 0.5f) * (float)cw / (float)nw - 0.5f;
-				float centerY = (y + 0.5f) * (float)ch / (float)nh - 0.5f;
+				const auto& pxA = pxTable[x];
+				const auto& wxA = wxTable[x];
 
-				float acc[4] = { 0, 0, 0, 0 };
+				float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
 				float weightSum = 0.0f;
 
-				int startX = (int)std::floor(centerX) - radius + 1;
-				int startY = (int)std::floor(centerY) - radius + 1;
-
-				for (int ky = 0; ky < radius * 2; ++ky)
+				for (int ky = 0; ky < kTaps; ++ky)
 				{
-					for (int kx = 0; kx < radius * 2; ++kx)
+					const float wy = wyA[ky];
+					const size_t rowBase = rowBaseA[ky];
+
+					for (int kx = 0; kx < kTaps; ++kx)
 					{
-						int px = std::clamp(startX + kx, 0, (int)cw - 1);
-						int py = std::clamp(startY + ky, 0, (int)ch - 1);
-
-						float dx = centerX - (float)px;
-						float dy = centerY - (float)py;
-
-						float weight = Lanczos(dx) * Lanczos(dy);
+						const float weight = wxA[kx] * wy;
 						weightSum += weight;
 
-						const size_t idx = ((size_t)py * cw + px) * 4;
+						const size_t idx = rowBase + (size_t)pxA[kx] * 4;
 
-						float r = std::pow(prev[idx + 0] / 255.0f, 2.2f);
-						float g = std::pow(prev[idx + 1] / 255.0f, 2.2f);
-						float b = std::pow(prev[idx + 2] / 255.0f, 2.2f);
-						float a = prev[idx + 3] / 255.0f;
+						const uint8_t r8 = prev[idx + 0];
+						const uint8_t g8 = prev[idx + 1];
+						const uint8_t b8 = prev[idx + 2];
+						const uint8_t a8 = prev[idx + 3];
 
-						acc[0] += r * weight;
-						acc[1] += g * weight;
-						acc[2] += b * weight;
-						acc[3] += a * weight;
+						acc0 += kToLinear[r8] * weight;
+						acc1 += kToLinear[g8] * weight;
+						acc2 += kToLinear[b8] * weight;
+						acc3 += kToNorm[a8] * weight;
 					}
 				}
 
 				if (weightSum > 0.0f)
 				{
-					acc[0] /= weightSum;
-					acc[1] /= weightSum;
-					acc[2] /= weightSum;
-					acc[3] /= weightSum;
+					const float invW = 1.0f / weightSum;
+					acc0 *= invW;
+					acc1 *= invW;
+					acc2 *= invW;
+					acc3 *= invW;
 				}
 
 				const size_t di = ((size_t)y * nw + x) * 4;
-				next[di + 0] = (uint8_t)std::clamp(std::pow(acc[0], 1.0f / 2.2f) * 255.0f, 0.0f, 255.0f);
-				next[di + 1] = (uint8_t)std::clamp(std::pow(acc[1], 1.0f / 2.2f) * 255.0f, 0.0f, 255.0f);
-				next[di + 2] = (uint8_t)std::clamp(std::pow(acc[2], 1.0f / 2.2f) * 255.0f, 0.0f, 255.0f);
-				next[di + 3] = (uint8_t)std::clamp(acc[3] * 255.0f, 0.0f, 255.0f);
+				dst[di + 0] = (uint8_t)std::clamp(std::pow(acc0, kInvGamma) * 255.0f, 0.0f, 255.0f);
+				dst[di + 1] = (uint8_t)std::clamp(std::pow(acc1, kInvGamma) * 255.0f, 0.0f, 255.0f);
+				dst[di + 2] = (uint8_t)std::clamp(std::pow(acc2, kInvGamma) * 255.0f, 0.0f, 255.0f);
+				dst[di + 3] = (uint8_t)std::clamp(acc3 * 255.0f, 0.0f, 255.0f);
 			}
 		}
 
-		mips.push_back(std::move(next));
+		mips.emplace_back(std::move(next));
 		cw = nw;
 		ch = nh;
 	}

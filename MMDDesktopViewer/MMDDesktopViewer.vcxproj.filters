@@ -46,6 +46,7 @@
     <None Include="PMX_VS.hlsl">
       <Filter>リソース ファイル</Filter>
     </None>
+    <None Include="..\README.md" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="App.cpp">
