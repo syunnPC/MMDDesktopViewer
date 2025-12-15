@@ -1,5 +1,6 @@
 ﻿#include "BoneSolver.hpp"
 #include <algorithm>
+#include <stdexcept>
 #include <functional>
 #include <cmath>
 
@@ -554,16 +555,65 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 
 void BoneSolver::UpdateMatrices()
 {
+	UpdateMatrices(true);
+}
+
+void BoneSolver::UpdateMatrices(bool solveIK)
+{
 	for (size_t idx : m_sortedBoneOrder)
 		UpdateBoneTransform(idx);
 
-	SolveIK();
+	if (solveIK)
+	{
+		SolveIK();
 
+		for (size_t idx : m_sortedBoneOrder)
+			UpdateBoneTransform(idx);
+	}
+
+	for (size_t i = 0; i < m_bones.size(); ++i)
+		CalculateSkinningMatrix(i);
+}
+
+void BoneSolver::UpdateMatricesNoIK()
+{
 	for (size_t idx : m_sortedBoneOrder)
 		UpdateBoneTransform(idx);
 
 	for (size_t i = 0; i < m_bones.size(); ++i)
 		CalculateSkinningMatrix(i);
+}
+
+const DirectX::XMFLOAT4X4& BoneSolver::GetBoneGlobalMatrix(size_t boneIndex) const
+{
+	if (boneIndex >= m_boneStates.size())
+	{
+		throw std::out_of_range("Bone index out of range");
+	}
+	return m_boneStates[boneIndex].globalMatrix;
+}
+
+const DirectX::XMFLOAT4X4& BoneSolver::GetBoneLocalMatrix(size_t boneIndex) const
+{
+	if (boneIndex >= m_boneStates.size())
+	{
+		throw std::out_of_range("BoneSolver::GetBoneLocalMatrix: boneIndex out of range");
+	}
+	return m_boneStates[boneIndex].localMatrix;
+}
+
+void BoneSolver::SetBoneLocalPose(size_t boneIndex,
+								  const DirectX::XMFLOAT3& translation,
+								  const DirectX::XMFLOAT4& rotation)
+{
+	if (boneIndex >= m_boneStates.size())
+	{
+		throw std::out_of_range("Bone index out of range");
+	}
+
+	auto& s = m_boneStates[boneIndex];
+	s.localTranslation = translation;
+	s.localRotation = rotation;
 }
 
 void BoneSolver::GetBoneBounds(DirectX::XMFLOAT3& outMin, DirectX::XMFLOAT3& outMax) const

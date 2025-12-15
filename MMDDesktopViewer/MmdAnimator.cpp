@@ -1,5 +1,6 @@
 ﻿#include "MmdAnimator.hpp"
 #include "BoneSolver.hpp"
+#include "MmdPhysicsWorld.hpp"
 #include <stdexcept>
 #include <algorithm>
 #include <DirectXMath.h>
@@ -51,9 +52,11 @@ MmdAnimator::MmdAnimator()
 	m_lastUpdate = std::chrono::steady_clock::now();
 	DirectX::XMStoreFloat4x4(&m_motionTransform, DirectX::XMMatrixIdentity());
 	m_boneSolver = std::make_unique<BoneSolver>();
+	m_physicsWorld = std::make_unique<MmdPhysicsWorld>();
 }
 
 MmdAnimator::~MmdAnimator() = default;
+
 
 bool MmdAnimator::LoadModel(const std::filesystem::path& pmx)
 {
@@ -67,6 +70,7 @@ bool MmdAnimator::LoadModel(const std::filesystem::path& pmx)
 
 		// ボーンソルバーを初期化
 		m_boneSolver->Initialize(m_model.get());
+		if (m_physicsWorld) m_physicsWorld->Reset();
 
 		return true;
 	}
@@ -83,6 +87,7 @@ bool MmdAnimator::LoadMotion(const std::filesystem::path& vmd)
 		m_pose = {};
 		m_paused = false;
 		DirectX::XMStoreFloat4x4(&m_motionTransform, DirectX::XMMatrixIdentity());
+		if (m_physicsWorld) m_physicsWorld->Reset();
 		return true;
 	}
 	return false;
@@ -96,6 +101,7 @@ void MmdAnimator::ClearMotion()
 	m_paused = false;
 	m_hasSkinnedPose = false;
 	DirectX::XMStoreFloat4x4(&m_motionTransform, DirectX::XMMatrixIdentity());
+	if (m_physicsWorld) m_physicsWorld->Reset();
 }
 
 void MmdAnimator::StopMotion()
@@ -130,21 +136,44 @@ void MmdAnimator::Tick(double dtSeconds)
 	if (m_paused) return;
 	m_time += dtSeconds;
 
-	if (!m_model || !m_motion)
+	if (!m_model)
 	{
 		m_hasSkinnedPose = false;
 		return;
 	}
 
-	const auto& motion = *m_motion;
+	const VmdMotion* motion = m_motion.get();
 	const float currentFrameRaw = static_cast<float>(m_time * m_fps);
-	const float maxFrame = static_cast<float>(motion.MaxFrame() + 1);
-	const float currentFrame = NormalizeFrame(currentFrameRaw, maxFrame);
+	float currentFrame = 0.0f;
+	if (motion)
+	{
+		const float maxFrame = static_cast<float>(motion->MaxFrame() + 1);
+		currentFrame = NormalizeFrame(currentFrameRaw, maxFrame);
+	}
 
 	m_pose.boneTranslations.clear();
 	m_pose.boneRotations.clear();
 	m_pose.morphWeights.clear();
 	m_pose.frame = currentFrame;
+
+	bool resetPhysics = false;
+
+	// ループ検知: 前フレームより明確に戻った（例: max付近→0付近）
+	if (motion && m_prevFrameForPhysicsValid)
+	{
+		// 0.5f はノイズ閾値
+		if (currentFrame + 0.5f < m_prevFrameForPhysics)
+			resetPhysics = true;
+
+		// ついでに「大ジャンプ」もReset（シークやdtスパイク対策）
+		if (std::abs(currentFrame - m_prevFrameForPhysics) > 10.0f)
+			resetPhysics = true;
+	}
+
+	if (resetPhysics && m_physicsWorld)
+	{
+		m_physicsWorld->Reset(); // 次の Step() で BuildFromModel される
+	}
 
 	auto sampleBone = [&](const VmdMotion::BoneTrack& track) {
 		if (track.keys.empty()) return;
@@ -197,9 +226,12 @@ void MmdAnimator::Tick(double dtSeconds)
 		m_pose.boneRotations[track.name] = rot;
 		};
 
-	for (const auto& track : motion.BoneTracks())
+	if (motion)
 	{
-		sampleBone(track);
+		for (const auto& track : motion->BoneTracks())
+		{
+			sampleBone(track);
+		}
 	}
 
 	auto sampleMorph = [&](const VmdMotion::MorphTrack& track) {
@@ -228,15 +260,37 @@ void MmdAnimator::Tick(double dtSeconds)
 		m_pose.morphWeights[track.name] = w;
 		};
 
-	for (const auto& track : motion.MorphTracks())
+	if (motion)
 	{
-		sampleMorph(track);
+		for (const auto& track : motion->MorphTracks())
+		{
+			sampleMorph(track);
+		}
 	}
 
 	// ボーンソルバーでスキニング行列を計算
 	m_boneSolver->ApplyPose(m_pose);
 	m_boneSolver->UpdateMatrices();
+
+	// 見た目寄りの最小物理 (剛体/ジョイントがあるモデルのみ)
+	if (m_physicsEnabled && m_physicsWorld && m_model && !m_model->RigidBodies().empty())
+	{
+		if (!m_physicsWorld->IsBuilt() || m_physicsWorld->BuiltRevision() != m_model->Revision())
+		{
+			m_physicsWorld->BuildFromModel(*m_model, *m_boneSolver);
+		}
+
+		if (m_physicsWorld->IsBuilt())
+		{
+			m_physicsWorld->Step(dtSeconds, *m_model, *m_boneSolver);
+			// 物理の書き戻し後にスキニング行列だけ更新(IKは回さない)
+			m_boneSolver->UpdateMatricesNoIK();
+		}
+	}
+
 	m_hasSkinnedPose = true;
+	m_prevFrameForPhysics = currentFrame;
+	m_prevFrameForPhysicsValid = true;
 
 	DirectX::XMStoreFloat4x4(&m_motionTransform, DirectX::XMMatrixIdentity());
 }
@@ -270,6 +324,7 @@ void MmdAnimator::SetModel(std::unique_ptr<PmxModel> model)
 	m_pose = {};
 	m_hasSkinnedPose = false;
 	m_boneSolver->Initialize(m_model.get());
+	if (m_physicsWorld) m_physicsWorld->Reset();
 }
 
 void MmdAnimator::GetBounds(float& minx, float& miny, float& minz, float& maxx, float& maxy, float& maxz) const

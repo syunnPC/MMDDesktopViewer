@@ -8,6 +8,8 @@
 #include "VmdMotion.hpp"
 #include "BoneSolver.hpp"
 
+class MmdPhysicsWorld;
+
 class MmdAnimator
 {
 public:
@@ -38,6 +40,19 @@ public:
 	void TogglePause()
 	{
 		m_paused = !m_paused;
+	}
+
+	bool PhysicsEnabled() const
+	{
+		return m_physicsEnabled;
+	}
+	void SetPhysicsEnabled(bool enabled)
+	{
+		m_physicsEnabled = enabled;
+	}
+	void TogglePhysics()
+	{
+		m_physicsEnabled = !m_physicsEnabled;
 	}
 
 	const PmxModel* Model() const
@@ -81,6 +96,9 @@ private:
 	std::unique_ptr<VmdMotion> m_motion;
 	std::unique_ptr<BoneSolver> m_boneSolver;
 
+	std::unique_ptr<MmdPhysicsWorld> m_physicsWorld;
+	bool m_physicsEnabled{ true };
+
 	double m_time{};
 	double m_fps{ 30.0 };
 
@@ -91,4 +109,7 @@ private:
 
 	Pose m_pose{};
 	DirectX::XMFLOAT4X4 m_motionTransform{};
+
+	float m_prevFrameForPhysics{ 0.0f };
+	bool  m_prevFrameForPhysicsValid{ false };
 };

@@ -36,8 +36,11 @@ namespace
 	constexpr int kGizmoMarginPx = 16;
 
 	constexpr int kHotKeyToggleGizmoId = 1;
+	constexpr int kHotKeyTogglePhysicsId = 2;
 	constexpr UINT kHotKeyToggleGizmoMods = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
 	constexpr UINT kHotKeyToggleGizmoVk = 'G';
+	constexpr UINT kHotKeyTogglePhysicsMods = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+	constexpr UINT kHotKeyTogglePhysicsVk = 'P';
 
 	enum TrayCmd : UINT
 	{
@@ -45,6 +48,7 @@ namespace
 		CMD_RELOAD_MOTIONS = 101,
 		CMD_STOP_MOTION = 102,
 		CMD_TOGGLE_PAUSE = 103,
+		CMD_TOGGLE_PHYSICS = 104,
 		CMD_EXIT = 199,
 		CMD_MOTION_BASE = 1000
 	};
@@ -98,6 +102,10 @@ App::App(HINSTANCE hInst) : m_hInst(hInst)
 	{
 		OutputDebugStringA("RegisterHotKey failed (Ctrl+Alt+G).\n");
 	}
+	if (!RegisterHotKey(m_renderWnd, kHotKeyTogglePhysicsId, kHotKeyTogglePhysicsMods, kHotKeyTogglePhysicsVk))
+	{
+		OutputDebugStringA("RegisterHotKey failed (Ctrl+Alt+P).\n");
+	}
 	CreateGizmoWindow();
 
 	ApplyTopmost();
@@ -116,6 +124,7 @@ App::~App()
 	if (m_trayMenu) DestroyMenu(m_trayMenu);
 	if (m_msgWnd) KillTimer(m_msgWnd, kTimerId);
 	if (m_renderWnd) UnregisterHotKey(m_renderWnd, kHotKeyToggleGizmoId);
+	if (m_renderWnd) UnregisterHotKey(m_renderWnd, kHotKeyTogglePhysicsId);
 	if (m_gizmoWnd) DestroyWindow(m_gizmoWnd);
 	if (m_comInitialized)
 	{
@@ -672,7 +681,7 @@ LRESULT CALLBACK App::RenderClickThroughProc(HWND hWnd, UINT msg, WPARAM wParam,
 		case WM_NCHITTEST:
 			return HTTRANSPARENT;
 		case WM_MOUSEACTIVATE:
-			return MA_NOACTIVATE; 
+			return MA_NOACTIVATE;
 		default:
 			break;
 	}
@@ -714,6 +723,9 @@ void App::BuildTrayMenu()
 
 	std::wstring pauseText = (m_animator && m_animator->IsPaused()) ? L"再開" : L"一時停止";
 	AppendMenuW(motionMenu, MF_STRING, CMD_TOGGLE_PAUSE, pauseText.c_str());
+
+	std::wstring physText = (m_animator && m_animator->PhysicsEnabled()) ? L"物理: ON" : L"物理: OFF";
+	AppendMenuW(motionMenu, MF_STRING, CMD_TOGGLE_PHYSICS, physText.c_str());
 
 	AppendMenuW(motionMenu, MF_STRING, CMD_STOP_MOTION, L"停止 (リセット)");
 	AppendMenuW(motionMenu, MF_SEPARATOR, 0, nullptr);
@@ -878,6 +890,14 @@ void App::OnTrayCommand(UINT id)
 			}
 			break;
 
+		case CMD_TOGGLE_PHYSICS:
+			if (m_animator)
+			{
+				m_animator->TogglePhysics();
+				BuildTrayMenu();
+			}
+			break;
+
 		case CMD_EXIT:
 			PostQuitMessage(0);
 			break;
@@ -1020,6 +1040,15 @@ LRESULT App::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 				ToggleGizmoWindow();
 				return 0;
 			}
+			if (wParam == kHotKeyTogglePhysicsId)
+			{
+				if (m_animator)
+				{
+					m_animator->TogglePhysics();
+					BuildTrayMenu();
+				}
+				return 0;
+			}
 			break;
 
 		case WM_NCHITTEST:
@@ -1067,9 +1096,9 @@ LRESULT App::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 							GetWindowRect(m_renderWnd, &rc);
 							const int newX = rc.left + dx;
 							const int newY = rc.top + dy;
-							SetWindowPos( m_renderWnd, nullptr, newX, newY,
-								0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-						
+							SetWindowPos(m_renderWnd, nullptr, newX, newY,
+										 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
 							if (m_gizmoVisible && m_gizmoWnd)
 							{
 								PositionGizmoWindow();

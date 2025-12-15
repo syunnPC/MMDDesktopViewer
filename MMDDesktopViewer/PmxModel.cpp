@@ -262,6 +262,8 @@ bool PmxModel::Load(const std::filesystem::path& pmxPath, ProgressCallback onPro
 	m_textures.clear();
 	m_materials.clear();
 	m_bones.clear();
+	m_rigidBodies.clear();
+	m_joints.clear();
 
 	m_minx = m_miny = m_minz = +std::numeric_limits<float>::infinity();
 	m_maxx = m_maxy = m_maxz = -std::numeric_limits<float>::infinity();
@@ -446,6 +448,14 @@ bool PmxModel::Load(const std::filesystem::path& pmxPath, ProgressCallback onPro
 	if (onProgress) onProgress(0.5f, L"ボーン構造を読み込み中...");
 	LoadBones(br);
 
+	// ----------------
+	// Morph / DisplayFrame / Physics
+	// ----------------
+	LoadMorphs(br);
+	LoadFrames(br);
+	LoadRigidBodies(br);
+	LoadJoints(br);
+
 	if (onProgress) onProgress(0.6f, L"PMX解析完了");
 
 	m_revision = g_revisionCounter++;
@@ -457,4 +467,216 @@ void PmxModel::GetBounds(float& minx, float& miny, float& minz,
 {
 	minx = m_minx; miny = m_miny; minz = m_minz;
 	maxx = m_maxx; maxy = m_maxy; maxz = m_maxz;
+}
+
+void PmxModel::LoadMorphs(BinaryReader& br)
+{
+	const int32_t morphCount = br.Read<std::int32_t>();
+	if (morphCount < 0) throw std::runtime_error("Invalid morphCount.");
+
+	// 今は物理まで到達するために「読み飛ばし」目的。必要になったら保持に拡張する。
+	for (int32_t i = 0; i < morphCount; ++i)
+	{
+		(void)ReadPmxText(br); // name
+		(void)ReadPmxText(br); // nameEn
+		(void)br.Read<std::uint8_t>(); // panel
+		const std::uint8_t morphType = br.Read<std::uint8_t>();
+		const int32_t offsetCount = br.Read<std::int32_t>();
+		if (offsetCount < 0) throw std::runtime_error("Invalid morph offsetCount.");
+
+		for (int32_t k = 0; k < offsetCount; ++k)
+		{
+			switch (morphType)
+			{
+				case 0: // Group
+					(void)ReadIndexSigned(br, m_header.morphIndexSize);
+					(void)br.Read<float>();
+					break;
+
+				case 1: // Vertex
+					(void)ReadIndexUnsigned(br, m_header.vertexIndexSize);
+					(void)br.Read<float>(); (void)br.Read<float>(); (void)br.Read<float>();
+					break;
+
+				case 2: // Bone
+					(void)ReadIndexSigned(br, m_header.boneIndexSize);
+					(void)br.Read<float>(); (void)br.Read<float>(); (void)br.Read<float>(); // trans
+					(void)br.Read<float>(); (void)br.Read<float>(); (void)br.Read<float>(); (void)br.Read<float>(); // rot(quat)
+					break;
+
+				case 3: // UV
+				case 4: // Additional UV1
+				case 5: // Additional UV2
+				case 6: // Additional UV3
+				case 7: // Additional UV4
+					(void)ReadIndexUnsigned(br, m_header.vertexIndexSize);
+					(void)br.Read<float>(); (void)br.Read<float>(); (void)br.Read<float>(); (void)br.Read<float>();
+					break;
+
+				case 8: // Material
+					(void)ReadIndexSigned(br, m_header.materialIndexSize);
+					(void)br.Read<std::uint8_t>(); // op
+
+					// diffuse(4) specular(3) specPow(1) ambient(3) edgeColor(4) edgeSize(1)
+					for (int t = 0; t < 4; ++t) (void)br.Read<float>();
+					for (int t = 0; t < 3; ++t) (void)br.Read<float>();
+					(void)br.Read<float>();
+					for (int t = 0; t < 3; ++t) (void)br.Read<float>();
+					for (int t = 0; t < 4; ++t) (void)br.Read<float>();
+					(void)br.Read<float>();
+
+					// tex/sphere/toon tint (各4)
+					for (int t = 0; t < 4; ++t) (void)br.Read<float>();
+					for (int t = 0; t < 4; ++t) (void)br.Read<float>();
+					for (int t = 0; t < 4; ++t) (void)br.Read<float>();
+					break;
+
+				case 9: // Flip
+					(void)ReadIndexSigned(br, m_header.morphIndexSize);
+					(void)br.Read<float>();
+					break;
+
+				case 10: // Impulse
+					(void)ReadIndexSigned(br, m_header.rigidIndexSize);
+					(void)br.Read<std::uint8_t>(); // local flag
+					for (int t = 0; t < 3; ++t) (void)br.Read<float>(); // velocity
+					for (int t = 0; t < 3; ++t) (void)br.Read<float>(); // torque
+					break;
+
+				default:
+					throw std::runtime_error("Unknown morph type.");
+			}
+		}
+	}
+}
+
+void PmxModel::LoadFrames(BinaryReader& br)
+{
+	const int32_t frameCount = br.Read<std::int32_t>();
+	if (frameCount < 0) throw std::runtime_error("Invalid frameCount.");
+
+	for (int32_t i = 0; i < frameCount; ++i)
+	{
+		(void)ReadPmxText(br);
+		(void)ReadPmxText(br);
+		(void)br.Read<std::uint8_t>(); // specialFlag
+		const int32_t elemCount = br.Read<std::int32_t>();
+		if (elemCount < 0) throw std::runtime_error("Invalid frame elemCount.");
+
+		for (int32_t k = 0; k < elemCount; ++k)
+		{
+			const std::uint8_t elemType = br.Read<std::uint8_t>(); // 0: bone, 1: morph
+			if (elemType == 0)
+			{
+				(void)ReadIndexSigned(br, m_header.boneIndexSize);
+			}
+			else if (elemType == 1)
+			{
+				(void)ReadIndexSigned(br, m_header.morphIndexSize);
+			}
+			else
+			{
+				throw std::runtime_error("Unknown frame element type.");
+			}
+		}
+	}
+}
+
+void PmxModel::LoadRigidBodies(BinaryReader& br)
+{
+	m_rigidBodies.clear();
+
+	const int32_t rigidCount = br.Read<std::int32_t>();
+	if (rigidCount < 0) throw std::runtime_error("Invalid rigidCount.");
+	m_rigidBodies.reserve(static_cast<size_t>(rigidCount));
+
+	for (int32_t i = 0; i < rigidCount; ++i)
+	{
+		RigidBody rb{};
+		rb.name = ReadPmxText(br);
+		rb.nameEn = ReadPmxText(br);
+
+		rb.boneIndex = ReadIndexSigned(br, m_header.boneIndexSize);
+		rb.groupIndex = br.Read<std::uint8_t>();
+		rb.ignoreCollisionGroup = br.Read<std::uint16_t>();
+
+		rb.shapeType = static_cast<RigidBody::ShapeType>(br.Read<std::uint8_t>());
+
+		rb.shapeSize.x = br.Read<float>();
+		rb.shapeSize.y = br.Read<float>();
+		rb.shapeSize.z = br.Read<float>();
+
+		rb.position.x = br.Read<float>();
+		rb.position.y = br.Read<float>();
+		rb.position.z = br.Read<float>();
+
+		rb.rotation.x = br.Read<float>();
+		rb.rotation.y = br.Read<float>();
+		rb.rotation.z = br.Read<float>();
+
+		rb.mass = br.Read<float>();
+		rb.linearDamping = br.Read<float>();
+		rb.angularDamping = br.Read<float>();
+		rb.restitution = br.Read<float>();
+		rb.friction = br.Read<float>();
+
+		rb.operation = static_cast<RigidBody::OperationType>(br.Read<std::uint8_t>());
+
+		m_rigidBodies.push_back(std::move(rb));
+	}
+}
+
+void PmxModel::LoadJoints(BinaryReader& br)
+{
+	m_joints.clear();
+
+	const int32_t jointCount = br.Read<std::int32_t>();
+	if (jointCount < 0) throw std::runtime_error("Invalid jointCount.");
+	m_joints.reserve(static_cast<size_t>(jointCount));
+
+	for (int32_t i = 0; i < jointCount; ++i)
+	{
+		Joint j{};
+		j.name = ReadPmxText(br);
+		j.nameEn = ReadPmxText(br);
+
+		j.operation = static_cast<Joint::OperationType>(br.Read<std::uint8_t>());
+
+		j.rigidBodyA = ReadIndexSigned(br, m_header.rigidIndexSize);
+		j.rigidBodyB = ReadIndexSigned(br, m_header.rigidIndexSize);
+
+		j.position.x = br.Read<float>();
+		j.position.y = br.Read<float>();
+		j.position.z = br.Read<float>();
+
+		j.rotation.x = br.Read<float>();
+		j.rotation.y = br.Read<float>();
+		j.rotation.z = br.Read<float>();
+
+		j.positionLower.x = br.Read<float>();
+		j.positionLower.y = br.Read<float>();
+		j.positionLower.z = br.Read<float>();
+
+		j.positionUpper.x = br.Read<float>();
+		j.positionUpper.y = br.Read<float>();
+		j.positionUpper.z = br.Read<float>();
+
+		j.rotationLower.x = br.Read<float>();
+		j.rotationLower.y = br.Read<float>();
+		j.rotationLower.z = br.Read<float>();
+
+		j.rotationUpper.x = br.Read<float>();
+		j.rotationUpper.y = br.Read<float>();
+		j.rotationUpper.z = br.Read<float>();
+
+		j.springPosition.x = br.Read<float>();
+		j.springPosition.y = br.Read<float>();
+		j.springPosition.z = br.Read<float>();
+
+		j.springRotation.x = br.Read<float>();
+		j.springRotation.y = br.Read<float>();
+		j.springRotation.z = br.Read<float>();
+
+		m_joints.push_back(std::move(j));
+	}
 }

@@ -34,6 +34,7 @@ public:
 	void ApplyPose(const BonePose& pose);
 	void SolveIK();
 	void UpdateMatrices();
+	void UpdateMatrices(bool solveIK);
 
 	void GetBoneBounds(DirectX::XMFLOAT3& outMin, DirectX::XMFLOAT3& outMax) const;
 
@@ -46,6 +47,16 @@ public:
 	{
 		return m_bones.size();
 	}
+
+	// 物理など外部システムが参照/書き戻しするための最小API
+	const DirectX::XMFLOAT4X4& GetBoneGlobalMatrix(size_t boneIndex) const;
+	const DirectX::XMFLOAT4X4& GetBoneLocalMatrix(size_t boneIndex) const;
+	void SetBoneLocalPose(size_t boneIndex,
+						  const DirectX::XMFLOAT3& translation,
+						  const DirectX::XMFLOAT4& rotation);
+
+	// 物理後にIKを回さずスキニング行列だけ更新したい場合に使用
+	void UpdateMatricesNoIK();
 
 private:
 	void CalculateLocalMatrix(size_t boneIndex);

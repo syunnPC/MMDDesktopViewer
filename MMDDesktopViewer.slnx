@@ -4,4 +4,5 @@
     <Platform Name="x86" />
   </Configurations>
   <Project Path="MMDDesktopViewer/MMDDesktopViewer.vcxproj" Id="15f05791-b213-450a-826c-e8643b89aab4" />
+  <Project Path="PmxInspect/PmxInspect.vcxproj" Id="71265881-c5fd-42c7-93fd-9f4c0143e6c1" />
 </Solution>

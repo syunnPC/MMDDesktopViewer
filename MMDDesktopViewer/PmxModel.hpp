@@ -142,6 +142,63 @@ public:
 		}
 	};
 
+	// 剛体(PMX)
+	struct RigidBody
+	{
+		enum class ShapeType : std::uint8_t
+		{
+			Sphere = 0, Box = 1, Capsule = 2
+		};
+		enum class OperationType : std::uint8_t
+		{
+			Static = 0, Dynamic = 1, DynamicAndPositionAdjust = 2
+		};
+
+		std::wstring name;
+		std::wstring nameEn;
+
+		std::int32_t boneIndex{ -1 };
+		std::uint8_t groupIndex{};
+		std::uint16_t ignoreCollisionGroup{};
+		ShapeType shapeType{ ShapeType::Sphere };
+		DirectX::XMFLOAT3 shapeSize{};
+
+		DirectX::XMFLOAT3 position{};
+		DirectX::XMFLOAT3 rotation{};
+
+		float mass{};
+		float linearDamping{};
+		float angularDamping{};
+		float restitution{};
+		float friction{};
+		OperationType operation{ OperationType::Static };
+	};
+
+	// ジョイント(PMX: Spring 6DOF)
+	struct Joint
+	{
+		enum class OperationType : std::uint8_t
+		{
+			Springy6Dof = 0
+		};
+
+		std::wstring name;
+		std::wstring nameEn;
+
+		OperationType operation{ OperationType::Springy6Dof };
+		std::int32_t rigidBodyA{ -1 };
+		std::int32_t rigidBodyB{ -1 };
+
+		DirectX::XMFLOAT3 position{};
+		DirectX::XMFLOAT3 rotation{};
+		DirectX::XMFLOAT3 positionLower{};
+		DirectX::XMFLOAT3 positionUpper{};
+		DirectX::XMFLOAT3 rotationLower{};
+		DirectX::XMFLOAT3 rotationUpper{};
+		DirectX::XMFLOAT3 springPosition{};
+		DirectX::XMFLOAT3 springRotation{};
+	};
+
 	using ProgressCallback = std::function<void(float, const wchar_t*)>;
 
 	bool Load(const std::filesystem::path& pmxPath, ProgressCallback onProgress = nullptr);
@@ -176,6 +233,15 @@ public:
 		return m_bones;
 	}
 
+	const std::vector<RigidBody>& RigidBodies() const
+	{
+		return m_rigidBodies;
+	}
+	const std::vector<Joint>& Joints() const
+	{
+		return m_joints;
+	}
+
 	bool HasGeometry() const
 	{
 		return !m_vertices.empty() && !m_indices.empty();
@@ -197,6 +263,11 @@ private:
 	VertexWeight ReadVertexWeight(BinaryReader& br) const;
 	void LoadBones(BinaryReader& br);
 
+	void LoadMorphs(BinaryReader& br);
+	void LoadFrames(BinaryReader& br);
+	void LoadRigidBodies(BinaryReader& br);
+	void LoadJoints(BinaryReader& br);
+
 	std::filesystem::path m_path;
 	Header m_header{};
 
@@ -207,6 +278,9 @@ private:
 	std::vector<std::filesystem::path> m_textures;
 	std::vector<Material> m_materials;
 	std::vector<Bone> m_bones;
+
+	std::vector<RigidBody> m_rigidBodies;
+	std::vector<Joint> m_joints;
 
 	float m_minx{ +std::numeric_limits<float>::infinity() };
 	float m_miny{ +std::numeric_limits<float>::infinity() };
