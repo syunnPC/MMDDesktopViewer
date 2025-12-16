@@ -222,6 +222,16 @@ void MmdAnimator::Tick(double dtSeconds)
 		DirectX::XMFLOAT4 rot;
 		DirectX::XMStoreFloat4(&rot, q);
 
+		if (track.name == L"全ての親")
+		{
+			trans = { 0.0f, 0.0f, 0.0f };
+		}
+		else if (track.name == L"センター")
+		{
+			trans.x = 0.0f;
+			trans.z = 0.0f;
+		}
+
 		m_pose.boneTranslations[track.name] = trans;
 		m_pose.boneRotations[track.name] = rot;
 		};

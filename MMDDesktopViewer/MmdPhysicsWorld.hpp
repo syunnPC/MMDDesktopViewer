@@ -46,6 +46,23 @@ public:
 		bool respectCollisionGroups{ true };
 		bool requireAfterPhysicsFlag{ true };
 
+		// Auto-generate kinematic body colliders (capsules) from the skeleton when the model has
+		// no bone-attached static rigid bodies (i.e. no collision bodies for the character itself).
+		bool generateBodyCollidersIfMissing{ true };
+		int minExistingBodyColliders{ 1 };
+		int maxGeneratedBodyColliders{ 200 };
+
+		float generatedBodyColliderMinBoneLength{ 0.04f };
+		float generatedBodyColliderRadiusRatio{ 0.18f };
+		float generatedBodyColliderMinRadius{ 0.5f };
+		float generatedBodyColliderMaxRadius{ 10.0f };
+
+		// Bones far away from the skeleton centroid are treated as accessories and ignored.
+		float generatedBodyColliderOutlierDistanceFactor{ 1.8f };
+
+		float generatedBodyColliderFriction{ 0.6f };
+		float generatedBodyColliderRestitution{ 0.0f };
+
 		int solverIterations{ 4 };
 		int collisionIterations{ 4 };
 
@@ -63,8 +80,7 @@ public:
 		//  - false : allow all non-static dynamic bodies to drive bones (legacy behavior; may move whole model)
 		bool writebackFallbackPositionAdjustOnly{ true };
 
-		// 初期重なり防止のため 0.85f を維持
-		float collisionRadiusScale{ 0.85f };
+		float collisionRadiusScale{ 1.0f };
 
 		float maxLinearSpeed{ 100.0f };
 		float maxAngularSpeed{ 40.0f };
@@ -80,7 +96,7 @@ public:
 		// [FIX] 0.8f -> 0.4f
 		// 関節が伸びなくなったので、バネ係数は少し下げて「しなやかさ」を出します。
 		// 動きが硬いと感じる場合は、ここを下げてください (0.2~0.4推奨)。
-		float springStiffnessScale{ 0.4f };
+		float springStiffnessScale{ 0.2f };
 
 		float minLinearDamping{ 0.2f };
 		float minAngularDamping{ 0.2f };

@@ -468,7 +468,8 @@ void MmdPhysicsWorld::BuildFromModel(const PmxModel& model, const BoneSolver& bo
 	Reset();
 
 	const auto& rbDefs = model.RigidBodies();
-	if (rbDefs.empty())
+
+	if (rbDefs.empty() && !m_settings.generateBodyCollidersIfMissing)
 	{
 		m_isBuilt = true;
 		m_builtRevision = model.Revision();
@@ -477,9 +478,37 @@ void MmdPhysicsWorld::BuildFromModel(const PmxModel& model, const BoneSolver& bo
 
 	const auto& bonesDef = model.Bones();
 
-	// [FIX] 自動判定を廃止し、MMD標準仕様(Ignore Mask)に強制固定
-	m_groupMaskIsCollisionMask = false;
-	m_groupMaskIsCollisionMask = false;
+	// Collision group mask semantics
+	{
+		const int sem = m_settings.collisionGroupMaskSemantics;
+		if (sem == 1) m_groupMaskIsCollisionMask = false;
+		else if (sem == 2) m_groupMaskIsCollisionMask = true;
+		else
+		{
+			int countZero = 0;
+			int countAll = 0;
+			for (const auto& d : rbDefs)
+			{
+				const uint16_t mask = d.ignoreCollisionGroup;
+				if (mask == 0) ++countZero;
+				else if (mask == 0xFFFFu) ++countAll;
+			}
+			m_groupMaskIsCollisionMask = (countAll > countZero);
+		}
+	}
+	// Detect group index base
+	{
+		int minG = 100;
+		int maxG = -100;
+		bool anyZero = false;
+		for (const auto& d : rbDefs)
+		{
+			minG = std::min(minG, static_cast<int>(d.groupIndex));
+			maxG = std::max(maxG, static_cast<int>(d.groupIndex));
+			if (d.groupIndex == 0) anyZero = true;
+		}
+		m_groupIndexIsOneBased = (!anyZero && minG >= 1 && maxG <= 16);
+	}
 
 	std::vector<DirectX::XMFLOAT4X4> bindGlobals(bonesDef.size());
 	std::vector<uint8_t> bindDone(bonesDef.size(), 0);
@@ -518,7 +547,11 @@ void MmdPhysicsWorld::BuildFromModel(const PmxModel& model, const BoneSolver& bo
 			return g;
 		};
 
+	m_bodies.reserve(rbDefs.size() + static_cast<size_t>(m_settings.maxGeneratedBodyColliders));
 	m_bodies.resize(rbDefs.size());
+
+	// [FIX] 既に剛体が割り当てられているボーンを追跡するためのフラグ配列
+	std::vector<bool> boneHasBody(bonesDef.size(), false);
 
 	for (size_t i = 0; i < rbDefs.size(); ++i)
 	{
@@ -529,6 +562,12 @@ void MmdPhysicsWorld::BuildFromModel(const PmxModel& model, const BoneSolver& bo
 		b.operation = def.operation;
 		b.shapeType = def.shapeType;
 		b.shapeSize = def.shapeSize;
+
+		// [FIX] 剛体を持つボーンをマーク
+		if (def.boneIndex >= 0 && def.boneIndex < static_cast<int>(bonesDef.size()))
+		{
+			boneHasBody[static_cast<size_t>(def.boneIndex)] = true;
+		}
 
 		if (b.shapeType == PmxModel::RigidBody::ShapeType::Box)
 		{
@@ -618,6 +657,169 @@ void MmdPhysicsWorld::BuildFromModel(const PmxModel& model, const BoneSolver& bo
 		m_bodies[i] = b;
 	}
 
+	// Auto-generate kinematic body colliders
+	if (m_settings.generateBodyCollidersIfMissing)
+	{
+		// [FIX] 既存剛体数のチェックを削除し、常に生成処理へ進みます。
+		// 代わりにループ内で boneHasBody を確認して重複を避けます。
+		if (true)
+		{
+			// Build child lists
+			std::vector<std::vector<int>> children(bonesDef.size());
+			for (size_t bi = 0; bi < bonesDef.size(); ++bi)
+			{
+				const int p = bonesDef[bi].parentIndex;
+				if (p >= 0 && p < static_cast<int>(bonesDef.size()))
+				{
+					children[static_cast<size_t>(p)].push_back(static_cast<int>(bi));
+				}
+			}
+
+			// Skeleton centroid
+			XMVECTOR sum = XMVectorZero();
+			int cnt = 0;
+			for (const auto& bd : bonesDef)
+			{
+				sum = XMVectorAdd(sum, Load3(bd.position));
+				++cnt;
+			}
+			XMVECTOR centroid = (cnt > 0) ? XMVectorScale(sum, 1.0f / static_cast<float>(cnt)) : XMVectorZero();
+
+			// [FIX] Outlier判定を実質無効化（無限大）にして、手足などの遠いボーンもカリングされないようにします。
+			const float outlierR = std::numeric_limits<float>::max();
+
+			struct Edge
+			{
+				int parent;
+				int child;
+				float len;
+				float depth;
+			};
+
+			std::vector<Edge> edges;
+			edges.reserve(bonesDef.size());
+
+			const float minLen = std::max(0.0f, m_settings.generatedBodyColliderMinBoneLength);
+			for (int p = 0; p < static_cast<int>(bonesDef.size()); ++p)
+			{
+				const XMVECTOR pp = Load3(bonesDef[static_cast<size_t>(p)].position);
+
+				// Outlier check removed (always passes with max outlierR)
+
+				for (int c : children[static_cast<size_t>(p)])
+				{
+					const XMVECTOR pc = Load3(bonesDef[static_cast<size_t>(c)].position);
+					// Outlier check removed
+
+					const float len = Length3(XMVectorSubtract(pc, pp));
+					if (len < minLen || !std::isfinite(len)) continue;
+
+					edges.push_back({ p, c, len, ComputeDepth(bonesDef, p) });
+				}
+			}
+
+			std::sort(edges.begin(), edges.end(), [](const Edge& a, const Edge& b)
+					  {
+						  if (a.len != b.len) return a.len > b.len;
+						  return a.depth < b.depth;
+					  });
+
+			const int maxGen = std::clamp(m_settings.maxGeneratedBodyColliders, 0, 512);
+			const int want = std::min<int>(maxGen, static_cast<int>(edges.size()));
+
+			auto quatFromTo = [&](XMVECTOR from, XMVECTOR to) -> XMVECTOR
+				{
+					from = SafeNormalize3(from);
+					to = SafeNormalize3(to);
+					if (XMVectorGetX(XMVector3LengthSq(from)) < kEps || XMVectorGetX(XMVector3LengthSq(to)) < kEps)
+						return XMQuaternionIdentity();
+
+					float dot = XMVectorGetX(XMVector3Dot(from, to));
+					dot = std::clamp(dot, -1.0f, 1.0f);
+
+					if (dot > 0.9999f) return XMQuaternionIdentity();
+					if (dot < -0.9999f)
+					{
+						XMVECTOR axis = XMVector3Cross(from, XMVectorSet(1, 0, 0, 0));
+						if (XMVectorGetX(XMVector3LengthSq(axis)) < 1.0e-6f)
+							axis = XMVector3Cross(from, XMVectorSet(0, 0, 1, 0));
+						axis = SafeNormalize3(axis);
+						return XMQuaternionRotationAxis(axis, XM_PI);
+					}
+
+					XMVECTOR axis = SafeNormalize3(XMVector3Cross(from, to));
+					const float angle = std::acos(dot);
+					return XMQuaternionRotationAxis(axis, angle);
+				};
+
+			const int genGroup = m_groupIndexIsOneBased ? 1 : 0;
+			const uint16_t genMask = m_groupMaskIsCollisionMask ? 0xFFFFu : 0u;
+
+			for (int ei = 0; ei < want; ++ei)
+			{
+				const Edge& e = edges[static_cast<size_t>(ei)];
+
+				const XMVECTOR p0 = Load3(bonesDef[static_cast<size_t>(e.parent)].position);
+				const XMVECTOR p1 = Load3(bonesDef[static_cast<size_t>(e.child)].position);
+
+				XMVECTOR d = XMVectorSubtract(p1, p0);
+				const float len = Length3(d);
+				if (len < minLen) continue;
+				XMVECTOR dir = XMVectorScale(d, 1.0f / std::max(len, kEps));
+
+				const float rRatio = std::max(0.0f, m_settings.generatedBodyColliderRadiusRatio);
+				float radius = len * rRatio;
+				// [FIX] 設定値（MaxRadius）を利用して、MMDスケールに合った太さを許可します
+				radius = std::clamp(radius, m_settings.generatedBodyColliderMinRadius, m_settings.generatedBodyColliderMaxRadius);
+				if (!std::isfinite(radius)) radius = m_settings.generatedBodyColliderMinRadius;
+
+				float hh = 0.5f * len - radius;
+				if (hh < 0.0f) hh = 0.0f;
+
+				XMVECTOR center = XMVectorScale(XMVectorAdd(p0, p1), 0.5f);
+				XMVECTOR q = quatFromTo(XMVectorSet(0, 1, 0, 0), dir);
+
+				XMFLOAT3 t{}; Store3(t, center);
+				XMFLOAT4 r{}; Store4(r, q);
+
+				Body b{};
+				b.defIndex = -1; // 自動生成マーク
+				b.boneIndex = e.parent;
+				b.operation = PmxModel::RigidBody::OperationType::Static;
+				b.shapeType = PmxModel::RigidBody::ShapeType::Capsule;
+				b.shapeSize = { radius, 2.0f * hh, 0.0f };
+				b.capsuleLocalAxis = { 0.0f, 1.0f, 0.0f };
+				b.capsuleRadius = radius;
+				b.capsuleHalfHeight = hh;
+
+				b.invMass = 0.0f;
+				b.invInertia = { 0.0f, 0.0f, 0.0f };
+
+				b.group = genGroup;
+				b.groupMask = genMask;
+				b.friction = m_settings.generatedBodyColliderFriction;
+				b.restitution = m_settings.generatedBodyColliderRestitution;
+
+				// Bind-space transform -> localFromBone
+				XMMATRIX rb0 = MatrixFromTR(t, r);
+				XMMATRIX bindBoneG = GetBindGlobal(GetBindGlobal, b.boneIndex);
+				XMMATRIX invBind = XMMatrixInverse(nullptr, bindBoneG);
+				XMMATRIX localFromBone = invBind * rb0;
+				XMStoreFloat4x4(&b.localFromBone, localFromBone);
+
+				DecomposeTR(rb0, b.position, b.rotation);
+				b.prevPosition = b.position;
+				b.prevRotation = b.rotation;
+				b.kinematicStartPos = b.position;
+				b.kinematicStartRot = b.rotation;
+				b.kinematicTargetPos = b.position;
+				b.kinematicTargetRot = b.rotation;
+
+				m_bodies.push_back(b);
+			}
+		}
+	}
+
 	BuildConstraints(model);
 
 	const int n = static_cast<int>(m_bodies.size());
@@ -627,13 +829,13 @@ void MmdPhysicsWorld::BuildFromModel(const PmxModel& model, const BoneSolver& bo
 	for (int i = 0; i < n; ++i)
 	{
 		Body& b = m_bodies[i];
-		const auto& def = rbDefs[i];
 
 		DirectX::XMMATRIX rbCurrent = MatrixFromTR(b.position, b.rotation);
 
-		if (def.boneIndex >= 0 && def.boneIndex < static_cast<int>(bonesDef.size()))
+		const int boneIndex = b.boneIndex;
+		if (boneIndex >= 0 && boneIndex < static_cast<int>(bonesDef.size()))
 		{
-			const auto& boneGlobalF = bones.GetBoneGlobalMatrix(static_cast<size_t>(def.boneIndex));
+			const auto& boneGlobalF = bones.GetBoneGlobalMatrix(static_cast<size_t>(boneIndex));
 			DirectX::XMMATRIX boneG = DirectX::XMLoadFloat4x4(&boneGlobalF);
 			DirectX::XMMATRIX localFromBone = DirectX::XMLoadFloat4x4(&b.localFromBone);
 			rbCurrent = boneG * localFromBone;
@@ -788,15 +990,15 @@ void MmdPhysicsWorld::PrecomputeKinematicTargets(const PmxModel& model, const Bo
 	for (size_t i = 0; i < m_bodies.size(); ++i)
 	{
 		Body& b = m_bodies[i];
-		const auto& def = rbDefs[i];
 
-		if (def.boneIndex < 0 || def.boneIndex >= static_cast<int>(bonesDef.size())) continue;
+		const int boneIndex = b.boneIndex;
+		if (boneIndex < 0 || boneIndex >= static_cast<int>(bonesDef.size())) continue;
 
 		// Save current pose as "start" (used for interpolation if kinematic, ignored if dynamic)
 		b.kinematicStartPos = b.position;
 		b.kinematicStartRot = b.rotation;
 
-		const auto& boneGlobalF = bones.GetBoneGlobalMatrix(static_cast<size_t>(def.boneIndex));
+		const auto& boneGlobalF = bones.GetBoneGlobalMatrix(static_cast<size_t>(boneIndex));
 		XMMATRIX boneG = XMLoadFloat4x4(&boneGlobalF);
 		XMMATRIX localFromBone = XMLoadFloat4x4(&b.localFromBone);
 		XMMATRIX rbG = boneG * localFromBone;
@@ -1060,7 +1262,14 @@ void MmdPhysicsWorld::SolveBodyCollisionsIteration(float dt, int iterIndex)
 			if (!m_settings.respectCollisionGroups) return true;
 			const Body& A = m_bodies[ia];
 			const Body& B = m_bodies[ib];
+
+			if (A.defIndex < 0 || B.defIndex < 0) return true;
+
 			int gA = A.group; int gB = B.group;
+			if (m_groupIndexIsOneBased)
+			{
+				gA -= 1; gB -= 1;
+			}
 			gA = std::clamp(gA, 0, 15); gB = std::clamp(gB, 0, 15);
 			const uint16_t bitA = static_cast<uint16_t>(1u << gA);
 			const uint16_t bitB = static_cast<uint16_t>(1u << gB);
@@ -1404,14 +1613,13 @@ void MmdPhysicsWorld::SolveGround(float dt, const PmxModel& model)
 
 void MmdPhysicsWorld::EndSubStep(float dt, const PmxModel& model)
 {
-	const auto& rbDefs = model.RigidBodies();
+	(void)model;
 	float invDt = 1.0f / std::max(dt, kEps);
 
 	for (size_t i = 0; i < m_bodies.size(); ++i)
 	{
 		Body& b = m_bodies[i];
-		const auto& def = rbDefs[i];
-		if (def.operation == PmxModel::RigidBody::OperationType::Static) continue;
+		if (b.operation == PmxModel::RigidBody::OperationType::Static) continue;
 		if (b.invMass <= 0.0f) continue;
 
 		XMVECTOR pCheck = Load3(b.position);
@@ -1534,6 +1742,9 @@ void MmdPhysicsWorld::WriteBackBones(const PmxModel& model, BoneSolver& bones)
 	const bool fallbackNoAfterPhysics = (m_settings.requireAfterPhysicsFlag && !anyAfterPhysics);
 
 	auto CollectBone = [&](size_t i) {
+		// [FIX] Added boundary check for generated bodies
+		if (i >= rbDefs.size()) return;
+
 		const auto& def = rbDefs[i];
 		if (def.operation == PmxModel::RigidBody::OperationType::Static) return;
 		if (def.boneIndex < 0 || def.boneIndex >= static_cast<int>(bonesDef.size())) return;
@@ -1551,7 +1762,6 @@ void MmdPhysicsWorld::WriteBackBones(const PmxModel& model, BoneSolver& bones)
 		}
 		else if (fallbackNoAfterPhysics && m_settings.writebackFallbackPositionAdjustOnly)
 		{
-			// If the model does not use AfterPhysics bones, avoid driving the whole skeleton.
 			if (def.operation != PmxModel::RigidBody::OperationType::DynamicAndPositionAdjust) return;
 		}
 
