@@ -223,7 +223,6 @@ private:
 	static float ComputeDepth(const std::vector<PmxModel::Bone>& bones, int boneIndex);
 	DirectX::XMFLOAT3 ExtractTranslation(const DirectX::XMMATRIX& m);
 
-private:
 	Settings m_settings{};
 
 	bool m_isBuilt{ false };
@@ -236,4 +235,10 @@ private:
 
 	bool m_groupIndexIsOneBased{ false };
 	bool m_groupMaskIsCollisionMask{ true };
+
+	bool m_anyKinematicMovedThisTick{ false };
+	int  m_sleepCounter{ 0 };
+	bool m_worldSleeping{ false };
+
+	bool ShouldSkipPhysicsTick();
 };

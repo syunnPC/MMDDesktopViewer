@@ -19,47 +19,42 @@ namespace
 	{
 		float minX; int index;
 	};
+
 	struct SapPair
 	{
 		int a; int b;
 	};
 
-	static float Length3(XMVECTOR v)
+	inline static float Length3(XMVECTOR v)
 	{
 		return XMVectorGetX(XMVector3Length(v));
 	}
 
-	static bool IsVectorFinite3(XMVECTOR v)
+	inline static bool IsVectorFinite3(XMVECTOR v)
 	{
 		XMFLOAT3 f; XMStoreFloat3(&f, v);
 		return std::isfinite(f.x) && std::isfinite(f.y) && std::isfinite(f.z);
 	}
 
-	static bool IsVectorFinite4(XMVECTOR v)
+	inline static bool IsVectorFinite4(XMVECTOR v)
 	{
 		XMFLOAT4 f; XMStoreFloat4(&f, v);
 		return std::isfinite(f.x) && std::isfinite(f.y) && std::isfinite(f.z) && std::isfinite(f.w);
 	}
 
-	static XMVECTOR SafeNormalize3(XMVECTOR v)
+	inline static XMVECTOR SafeNormalize3(XMVECTOR v)
 	{
 		float len = Length3(v);
 		if (len < kBigEps || !std::isfinite(len)) return XMVectorZero();
 		return XMVectorScale(v, 1.0f / len);
 	}
 
-	static int PopCount16(uint16_t x)
+	inline static int PopCount16(uint16_t x)
 	{
-		int c = 0;
-		while (x)
-		{
-			c += (x & 1u);
-			x >>= 1;
-		}
-		return c;
+		return std::popcount(x);
 	}
 
-	static XMVECTOR QuaternionFromAngularVelocity(FXMVECTOR w, float dt)
+	inline static XMVECTOR QuaternionFromAngularVelocity(FXMVECTOR w, float dt)
 	{
 		XMVECTOR axisLen = XMVector3Length(w);
 		float angle = XMVectorGetX(axisLen) * dt;
@@ -71,7 +66,7 @@ namespace
 		return XMQuaternionRotationAxis(axis, angle);
 	}
 
-	static XMVECTOR QuaternionFromRotationVector(FXMVECTOR rv)
+	inline static XMVECTOR QuaternionFromRotationVector(FXMVECTOR rv)
 	{
 		float angle = Length3(rv);
 		if (angle < kEps || !std::isfinite(angle)) return XMQuaternionIdentity();
@@ -82,7 +77,7 @@ namespace
 		return XMQuaternionRotationAxis(axis, angle);
 	}
 
-	static XMVECTOR SafeQuaternionRotationAxis(FXMVECTOR axis, float angle)
+	inline static XMVECTOR SafeQuaternionRotationAxis(FXMVECTOR axis, float angle)
 	{
 		if (!std::isfinite(angle) || std::abs(angle) < kEps) return XMQuaternionIdentity();
 		float len = Length3(axis);
@@ -91,7 +86,7 @@ namespace
 		return XMQuaternionRotationAxis(nAxis, angle);
 	}
 
-	static XMVECTOR QuaternionDeltaToAngularVelocity(FXMVECTOR dqIn, float dt)
+	inline static XMVECTOR QuaternionDeltaToAngularVelocity(FXMVECTOR dqIn, float dt)
 	{
 		dt = std::max(dt, kEps);
 		XMVECTOR dq = dqIn;
@@ -123,22 +118,22 @@ namespace
 		return omega;
 	}
 
-	static XMVECTOR RotateVector(FXMVECTOR v, FXMVECTOR q)
+	inline static XMVECTOR RotateVector(FXMVECTOR v, FXMVECTOR q)
 	{
 		return XMVector3Rotate(v, q);
 	}
 
-	static float Dot3(XMVECTOR a, XMVECTOR b)
+	inline static float Dot3(XMVECTOR a, XMVECTOR b)
 	{
 		return XMVectorGetX(XMVector3Dot(a, b));
 	}
 
-	static float Clamp01(float v)
+	inline static float Clamp01(float v)
 	{
 		return std::min(1.0f, std::max(0.0f, v));
 	}
 
-	static XMFLOAT3 QuaternionToEulerXYZ(FXMVECTOR q)
+	inline static XMFLOAT3 QuaternionToEulerXYZ(FXMVECTOR q)
 	{
 		XMFLOAT4 f;
 		XMStoreFloat4(&f, q);
@@ -158,12 +153,12 @@ namespace
 		return { rx, ry, rz };
 	}
 
-	static XMVECTOR EulerXYZToQuaternion(float x, float y, float z)
+	inline static XMVECTOR EulerXYZToQuaternion(float x, float y, float z)
 	{
 		return XMQuaternionRotationRollPitchYaw(x, y, z);
 	}
 
-	static void ClosestPtSegmentSegment(
+	inline static void ClosestPtSegmentSegment(
 		FXMVECTOR p1, FXMVECTOR q1,
 		FXMVECTOR p2, FXMVECTOR q2,
 		XMVECTOR& outC1, XMVECTOR& outC2)
@@ -222,7 +217,7 @@ namespace
 
 
 	// --- Box/OBB collision helpers ---
-	static XMVECTOR ClosestPointOnAABB(FXMVECTOR p, float ex, float ey, float ez)
+	inline static XMVECTOR ClosestPointOnAABB(FXMVECTOR p, float ex, float ey, float ez)
 	{
 		float x = std::clamp(XMVectorGetX(p), -ex, ex);
 		float y = std::clamp(XMVectorGetY(p), -ey, ey);
@@ -230,7 +225,7 @@ namespace
 		return XMVectorSet(x, y, z, 0.0f);
 	}
 
-	static bool IsInsideAABB(FXMVECTOR p, float ex, float ey, float ez)
+	inline static bool IsInsideAABB(FXMVECTOR p, float ex, float ey, float ez)
 	{
 		const float x = XMVectorGetX(p);
 		const float y = XMVectorGetY(p);
@@ -291,7 +286,7 @@ namespace
 		}
 	}
 
-	static XMVECTOR SupportPointOBB(
+	inline static XMVECTOR SupportPointOBB(
 		FXMVECTOR c, FXMVECTOR q,
 		float ex, float ey, float ez,
 		FXMVECTOR dirWorld)
@@ -449,12 +444,12 @@ namespace
 		return true;
 	}
 
-	static XMVECTOR QuaternionConjugate(FXMVECTOR q)
+	inline static XMVECTOR QuaternionConjugate(FXMVECTOR q)
 	{
 		return XMQuaternionConjugate(q);
 	}
 
-	static DirectX::XMMATRIX MatrixRotationEulerXYZ(float rx, float ry, float rz)
+	inline static DirectX::XMMATRIX MatrixRotationEulerXYZ(float rx, float ry, float rz)
 	{
 		// v * (Rx*Ry*Rz) が X→Y→Z の適用
 		return DirectX::XMMatrixRotationX(rx)
@@ -954,6 +949,13 @@ void MmdPhysicsWorld::Step(double dtSeconds, const PmxModel& model, BoneSolver& 
 	{
 		PrecomputeKinematicTargets(model, bones);
 
+		if (ShouldSkipPhysicsTick())
+		{
+			m_accumulator -= m_settings.fixedTimeStep;
+			++stepCount;
+			continue;
+		}
+
 		const int subSteps = std::max(1, m_settings.maxSubSteps);
 		const float subStepDt = m_settings.fixedTimeStep / static_cast<float>(subSteps);
 
@@ -996,29 +998,101 @@ void MmdPhysicsWorld::Step(double dtSeconds, const PmxModel& model, BoneSolver& 
 
 void MmdPhysicsWorld::PrecomputeKinematicTargets(const PmxModel& model, const BoneSolver& bones)
 {
-	const auto& rbDefs = model.RigidBodies();
 	const auto& bonesDef = model.Bones();
 
-	// [CHANGE] Calculate target for ALL bodies (Static/Kinematic AND Dynamic).
-	// This allows Dynamic bodies to know their "Bind Pose" location for rescue logic.
+	m_anyKinematicMovedThisTick = false;
+
 	for (size_t i = 0; i < m_bodies.size(); ++i)
 	{
 		Body& b = m_bodies[i];
 
+		if (b.invMass > 0.0f) continue;
+
 		const int boneIndex = b.boneIndex;
 		if (boneIndex < 0 || boneIndex >= static_cast<int>(bonesDef.size())) continue;
 
-		// Save current pose as "start" (used for interpolation if kinematic, ignored if dynamic)
 		b.kinematicStartPos = b.position;
 		b.kinematicStartRot = b.rotation;
 
 		const auto& boneGlobalF = bones.GetBoneGlobalMatrix(static_cast<size_t>(boneIndex));
-		XMMATRIX boneG = XMLoadFloat4x4(&boneGlobalF);
-		XMMATRIX localFromBone = XMLoadFloat4x4(&b.localFromBone);
-		XMMATRIX rbG = boneG * localFromBone;
+		DirectX::XMMATRIX boneG = DirectX::XMLoadFloat4x4(&boneGlobalF);
+		DirectX::XMMATRIX localFromBone = DirectX::XMLoadFloat4x4(&b.localFromBone);
+		DirectX::XMMATRIX rbG = boneG * localFromBone;
+
+		DirectX::XMFLOAT3 prevT = b.kinematicTargetPos;
+		DirectX::XMFLOAT4 prevR = b.kinematicTargetRot;
 
 		DecomposeTR(rbG, b.kinematicTargetPos, b.kinematicTargetRot);
+
+		const float dx = b.kinematicTargetPos.x - prevT.x;
+		const float dy = b.kinematicTargetPos.y - prevT.y;
+		const float dz = b.kinematicTargetPos.z - prevT.z;
+		const float dp2 = dx * dx + dy * dy + dz * dz;
+
+		const float dot =
+			std::fabs(prevR.x * b.kinematicTargetRot.x +
+					  prevR.y * b.kinematicTargetRot.y +
+					  prevR.z * b.kinematicTargetRot.z +
+					  prevR.w * b.kinematicTargetRot.w);
+
+		if (dp2 > 1.0e-10f || (1.0f - dot) > 1.0e-6f)
+			m_anyKinematicMovedThisTick = true;
 	}
+}
+
+bool MmdPhysicsWorld::ShouldSkipPhysicsTick()
+{
+	const float vThr = m_settings.sleepLinearSpeed;
+	const float wThr = m_settings.sleepAngularSpeed;
+
+	if (vThr <= 0.0f && wThr <= 0.0f)
+	{
+		m_sleepCounter = 0;
+		m_worldSleeping = false;
+		return false;
+	}
+
+	// 骨が動いたら即起床
+	if (m_anyKinematicMovedThisTick)
+	{
+		m_sleepCounter = 0;
+		m_worldSleeping = false;
+		return false;
+	}
+
+	const float v2Thr = (vThr > 0.0f) ? (vThr * vThr) : 0.0f;
+	const float w2Thr = (wThr > 0.0f) ? (wThr * wThr) : 0.0f;
+
+	bool anyMoving = false;
+	for (const Body& b : m_bodies)
+	{
+		if (b.invMass <= 0.0f) continue; // dynamicのみ
+
+		const float vx = b.linearVelocity.x, vy = b.linearVelocity.y, vz = b.linearVelocity.z;
+		const float wx = b.angularVelocity.x, wy = b.angularVelocity.y, wz = b.angularVelocity.z;
+
+		const float v2 = vx * vx + vy * vy + vz * vz;
+		const float w2 = wx * wx + wy * wy + wz * wz;
+
+		if ((v2Thr > 0.0f && v2 > v2Thr) || (w2Thr > 0.0f && w2 > w2Thr))
+		{
+			anyMoving = true;
+			break;
+		}
+	}
+
+	if (anyMoving)
+	{
+		m_sleepCounter = 0;
+		m_worldSleeping = false;
+		return false;
+	}
+
+	// しばらく静止したらsleep
+	if (++m_sleepCounter >= 10)
+		m_worldSleeping = true;
+
+	return m_worldSleeping;
 }
 
 void MmdPhysicsWorld::InterpolateKinematicBodies(float t)
@@ -1144,243 +1218,308 @@ void MmdPhysicsWorld::SolveBodyCollisions(float dt)
 		{
 			outC = Load3(b.position);
 			outQ = Load4(b.rotation);
-			outEx = std::max(kBigEps, 0.5f * b.shapeSize.x * radiusScale);
-			outEy = std::max(kBigEps, 0.5f * b.shapeSize.y * radiusScale);
-			outEz = std::max(kBigEps, 0.5f * b.shapeSize.z * radiusScale);
+			outEx = std::max(kEps, b.shapeSize.x * radiusScale * 0.5f);
+			outEy = std::max(kEps, b.shapeSize.y * radiusScale * 0.5f);
+			outEz = std::max(kEps, b.shapeSize.z * radiusScale * 0.5f);
 		};
 
-	// ヘルパー: 境界半径計算 (事前計算用)
-	auto computeBoundRadius = [&](const Body& b) -> float
-		{
-			if (b.shapeType == PmxModel::RigidBody::ShapeType::Box)
-			{
-				float ex = 0.5f * b.shapeSize.x * radiusScale;
-				float ey = 0.5f * b.shapeSize.y * radiusScale;
-				float ez = 0.5f * b.shapeSize.z * radiusScale;
-				return std::sqrt(ex * ex + ey * ey + ez * ez) + collisionMargin;
-			}
-			return b.capsuleHalfHeight + (b.capsuleRadius * radiusScale) + collisionMargin;
-		};
-
-	// ヘルパー: 衝突判定 (Narrow Phase)
+	// 接触計算（カプセル/ボックス対応）
 	auto computeContact = [&](const Body& A, const Body& B, XMVECTOR& outN, float& outPen, XMVECTOR& outPA, XMVECTOR& outPB) -> bool
 		{
-			const bool boxA = (A.shapeType == PmxModel::RigidBody::ShapeType::Box);
-			const bool boxB = (B.shapeType == PmxModel::RigidBody::ShapeType::Box);
+			// phantom は「混合（静/動）」の静側のみ拡張
+			const bool isMixed = ((A.invMass <= 0.0f) != (B.invMass <= 0.0f));
+			const float extraA = (isMixed && (A.invMass <= 0.0f)) ? kPhantomMargin : 0.0f;
+			const float extraB = (isMixed && (B.invMass <= 0.0f)) ? kPhantomMargin : 0.0f;
 
-			bool isStaticA = (A.invMass == 0.0f);
-			bool isStaticB = (B.invMass == 0.0f);
-			bool isMixed = (isStaticA != isStaticB);
+			const bool aBox = (A.shapeType == PmxModel::RigidBody::ShapeType::Box);
+			const bool bBox = (B.shapeType == PmxModel::RigidBody::ShapeType::Box);
 
-			float marginA = (isMixed && isStaticA) ? kPhantomMargin : 0.0f;
-			float marginB = (isMixed && isStaticB) ? kPhantomMargin : 0.0f;
-			float totalPhantom = marginA + marginB;
-
-			// Capsule vs Capsule
-			if (!boxA && !boxB)
+			// Capsule - Capsule (Sphereもここに入る)
+			if (!aBox && !bBox)
 			{
 				XMVECTOR a0, a1, b0, b1;
 				float rA = 0.0f, rB = 0.0f;
 				makeCapsuleSegment(A, a0, a1, rA);
 				makeCapsuleSegment(B, b0, b1, rB);
 
+				// contact側の距離閾値（collisionMarginは1回、phantomは静側のみ）
+				const float minDist = (rA + rB) + collisionMargin + (extraA + extraB);
+
 				XMVECTOR c1, c2;
 				ClosestPtSegmentSegment(a0, a1, b0, b1, c1, c2);
 
 				XMVECTOR d = XMVectorSubtract(c2, c1);
 				float dist = Length3(d);
-				const float minDist = (rA + rB) + collisionMargin + totalPhantom;
 				if (dist >= minDist) return false;
 
-				outPen = (minDist - dist);
-				outPen = std::max(0.0f, outPen - slop);
-				if (outPen <= 0.0f) return false;
+				float pen = (minDist - dist);
+				if (pen < slop) return false;
+				pen -= slop;
 
-				if (dist > kEps) outN = XMVectorScale(d, 1.0f / dist);
-				else
-				{
-					outN = SafeNormalize3(XMVectorSubtract(Load3(B.position), Load3(A.position)));
-					if (XMVector3Equal(outN, XMVectorZero())) outN = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-				}
-				outPA = c1; outPB = c2;
+				XMVECTOR n = (dist > kEps) ? XMVectorScale(d, 1.0f / dist) : XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+
+				outN = n;
+				outPen = pen;
+				outPA = c1;
+				outPB = c2;
 				return true;
 			}
-			// Box vs Box
-			if (boxA && boxB)
+
+			// Box - Box
+			if (aBox && bBox)
 			{
 				XMVECTOR cA, qA, cB, qB;
 				float exA, eyA, ezA, exB, eyB, ezB;
 				getBox(A, cA, qA, exA, eyA, ezA);
 				getBox(B, cB, qB, exB, eyB, ezB);
+
+				// collisionMargin は box 側にも分配して安全側（既存挙動に合わせる）
 				const float m = 0.5f * collisionMargin;
-				exA += m + marginA; eyA += m + marginA; ezA += m + marginA;
-				exB += m + marginB; eyB += m + marginB; ezB += m + marginB;
-				XMVECTOR n, pA, pB;
+				exA += (m + extraA); eyA += (m + extraA); ezA += (m + extraA);
+				exB += (m + extraB); eyB += (m + extraB); ezB += (m + extraB);
+
+				XMVECTOR n;
 				float pen = 0.0f;
-				if (!ContactOBB_OBB(cA, qA, exA, eyA, ezA, cB, qB, exB, eyB, ezB, n, pen, pA, pB)) return false;
-				outN = n; outPen = pen; outPA = pA; outPB = pB;
-				outPen = std::max(0.0f, outPen - slop);
-				if (outPen <= 0.0f) return false;
+				XMVECTOR pA, pB;
+				if (!ContactOBB_OBB(cA, qA, exA, eyA, ezA, cB, qB, exB, eyB, ezB, n, pen, pA, pB))
+					return false;
+
+				if (pen < slop) return false;
+				pen -= slop;
+
+				outN = n;
+				outPen = pen;
+				outPA = pA;
+				outPB = pB;
 				return true;
 			}
-			// Capsule vs Box
-			const Body* capBody = boxA ? &B : &A;
-			const Body* boxBody = boxA ? &A : &B;
-			const bool swapAB = boxA;
-			float extraCap = (boxA ? marginB : marginA);
-			float extraBox = (boxA ? marginA : marginB);
-			XMVECTOR cap0, cap1; float capR = 0.0f;
-			makeCapsuleSegment(*capBody, cap0, cap1, capR);
-			capR += extraCap;
-			XMVECTOR boxC, boxQ; float ex, ey, ez;
-			getBox(*boxBody, boxC, boxQ, ex, ey, ez);
-			ex += extraBox; ey += extraBox; ez += extraBox;
-			XMVECTOR nCB, pCap, pBox; float pen = 0.0f;
-			if (!ContactCapsule_OBB(cap0, cap1, capR + collisionMargin, boxC, boxQ, ex, ey, ez, nCB, pen, pCap, pBox)) return false;
-			if (!swapAB)
+
+			// Capsule - Box
+			const Body& cap = aBox ? B : A;
+			const Body& box = aBox ? A : B;
+			const float extraBox = aBox ? extraA : extraB;
+
+			XMVECTOR cap0, cap1;
+			float capR = 0.0f;
+			makeCapsuleSegment(cap, cap0, cap1, capR);
+
+			XMVECTOR boxC, boxQ;
+			float ex, ey, ez;
+			getBox(box, boxC, boxQ, ex, ey, ez);
+
+			XMVECTOR n;
+			float pen = 0.0f;
+			XMVECTOR pCap, pBox;
+			if (!ContactCapsule_OBB(
+				cap0, cap1, capR + collisionMargin,
+				boxC, boxQ, ex + extraBox, ey + extraBox, ez + extraBox,
+				n, pen, pCap, pBox))
+				return false;
+
+			if (pen < slop) return false;
+			pen -= slop;
+
+			// n は「A->B」方向に合わせる
+			if (aBox)
 			{
-				outN = nCB; outPen = pen; outPA = pCap; outPB = pBox;
+				// AがBox, BがCapsule の場合：接触計算は (capsule, box) なので反転
+				n = XMVectorNegate(n);
+				std::swap(pCap, pBox);
 			}
-			else
-			{
-				outN = XMVectorNegate(nCB); outPen = pen; outPA = pBox; outPB = pCap;
-			}
-			outPen = std::max(0.0f, outPen - slop);
-			if (outPen <= 0.0f) return false;
+
+			outN = n;
+			outPen = pen;
+			outPA = pCap; // A側
+			outPB = pBox; // B側
 			return true;
 		};
 
-	// ヘルパー: 衝突フィルタ
-	auto shouldCollide = [&](int ia, int ib) -> bool
+	// 衝突グループ判定
+	auto shouldCollide = [&](int i, int j) -> bool
 		{
 			if (!m_settings.respectCollisionGroups) return true;
-			const Body& A = m_bodies[ia];
-			const Body& B = m_bodies[ib];
-			if (A.defIndex < 0 || B.defIndex < 0) return true;
+			const Body& A = m_bodies[static_cast<size_t>(i)];
+			const Body& B = m_bodies[static_cast<size_t>(j)];
 
-			int gA = A.group; int gB = B.group;
+			uint16_t maskA = A.groupMask;
+			uint16_t maskB = B.groupMask;
+
+			int groupA = A.group;
+			int groupB = B.group;
 			if (m_groupIndexIsOneBased)
 			{
-				gA -= 1; gB -= 1;
+				groupA -= 1; groupB -= 1;
 			}
-			gA = std::clamp(gA, 0, 15); gB = std::clamp(gB, 0, 15);
 
-			const uint16_t maskA = A.groupMask;
-			const uint16_t maskB = B.groupMask;
-			const uint16_t bitA = static_cast<uint16_t>(1u << gA);
-			const uint16_t bitB = static_cast<uint16_t>(1u << gB);
+			if (groupA < 0 || groupA >= 16 || groupB < 0 || groupB >= 16) return true;
+
+			const uint16_t bitA = static_cast<uint16_t>(1u << groupA);
+			const uint16_t bitB = static_cast<uint16_t>(1u << groupB);
 
 			if (m_groupMaskIsCollisionMask)
 			{
-				if ((maskA & bitB) == 0) return false;
-				if ((maskB & bitA) == 0) return false;
+				// mask が「当たる相手」ビット
+				return ((maskA & bitB) != 0) && ((maskB & bitA) != 0);
 			}
 			else
 			{
-				if ((maskA & bitB) != 0) return false;
-				if ((maskB & bitA) != 0) return false;
+				// mask が「当たらない相手」ビット
+				return ((maskA & bitB) == 0) && ((maskB & bitA) == 0);
 			}
-			return true;
 		};
 
-	// ヘルパー: インパルス適用
-	auto applyImpulse = [&](Body& body, FXMVECTOR impulse, FXMVECTOR lever, FXMVECTOR n)
+	// 位置・回転に直接インパルスを反映（XPBD系）
+	auto applyImpulse = [&](Body& body, XMVECTOR impulse, XMVECTOR lever, XMVECTOR n)
 		{
 			const float w = body.invMass;
 			if (w <= 0.0f) return;
+
 			XMVECTOR p = Load3(body.position);
 			p = XMVectorAdd(p, XMVectorScale(impulse, w));
 			Store3(body.position, p);
 
-			XMVECTOR dtheta = XMVector3Cross(lever, impulse);
 			XMVECTOR q = Load4(body.rotation);
-			XMVECTOR invInertia = Load3(body.invInertia);
-			XMVECTOR wx = XMVectorMultiply(invInertia, dtheta);
-			float angLen = Length3(wx);
-			float maxAng = (m_settings.maxContactAngularCorrection > 0.0f)
-				? m_settings.maxContactAngularCorrection : m_settings.maxJointAngularCorrection;
-			if (angLen > maxAng) wx = XMVectorScale(wx, maxAng / angLen);
 
-			XMVECTOR dq = XMQuaternionRotationAxis(SafeNormalize3(wx), Length3(wx));
+			// 角度補正（トルク = r x J）
+			XMVECTOR T = XMVector3Cross(lever, impulse);
+			XMVECTOR dTheta = XMVectorMultiply(Load3(body.invInertia), T);
+
+			float theta = Length3(dTheta);
+			const float maxTheta = std::max(0.0f, m_settings.maxContactAngularCorrection);
+			if (maxTheta > 0.0f && theta > maxTheta)
+			{
+				dTheta = XMVectorScale(dTheta, maxTheta / theta);
+			}
+
+			XMVECTOR dq = QuaternionFromRotationVector(dTheta);
 			q = XMQuaternionNormalize(XMQuaternionMultiply(dq, q));
 			Store4(body.rotation, q);
 		};
 
-	std::vector<SapNode> axisList;
-	std::vector<float> radii;
-	std::vector<SapPair> candidates;
+	static std::vector<SapNode> axisList;
+	static std::vector<float> radii;   // sphere-check
+	static std::vector<float> maxXs;   // SAP 用 maxX
+	static std::vector<SapPair> candidates;
+	static size_t s_candidateReserve = 0;
 
-	axisList.resize(bodyCount);
-	radii.resize(bodyCount);
+	axisList.resize(static_cast<size_t>(bodyCount));
+	radii.resize(static_cast<size_t>(bodyCount));
+	maxXs.resize(static_cast<size_t>(bodyCount));
+
 	candidates.clear();
-	candidates.reserve(static_cast<size_t>(bodyCount) * 4);
+	{
+		const size_t hint = std::max(s_candidateReserve, static_cast<size_t>(bodyCount) * 8ull);
+		candidates.reserve(hint);
+	}
 
-	// 並列化: 半径計算とAABB(X軸)の準備
+	// 並列化: 半径計算とAABB(X軸区間)の準備
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static) if(bodyCount >= 256)
 #endif
 	for (int i = 0; i < bodyCount; ++i)
 	{
-		radii[i] = computeBoundRadius(m_bodies[i]);
-		// 位置の取得 (Load3は軽いのでここで実行)
-		XMVECTOR pos = Load3(m_bodies[i].position);
-		float x = XMVectorGetX(pos);
-		// AABB MinX
-		axisList[i] = { x - radii[i], i };
+		const Body& b = m_bodies[static_cast<size_t>(i)];
+		const float extra = (b.invMass <= 0.0f) ? kPhantomMargin : 0.0f;
+
+		XMVECTOR c = Load3(b.position);
+
+		float minX = 0.0f;
+		float maxX = 0.0f;
+		float boundR = 0.0f;
+
+		if (b.shapeType == PmxModel::RigidBody::ShapeType::Box)
+		{
+			// Box: OBB の X軸投影で区間を作る（bound sphere よりかなりタイト）
+			const float ex = std::max(kEps, b.shapeSize.x * radiusScale * 0.5f);
+			const float ey = std::max(kEps, b.shapeSize.y * radiusScale * 0.5f);
+			const float ez = std::max(kEps, b.shapeSize.z * radiusScale * 0.5f);
+
+			XMVECTOR q = Load4(b.rotation);
+			const XMVECTOR ux = XMVector3Rotate(XMVectorSet(1, 0, 0, 0), q);
+			const XMVECTOR uy = XMVector3Rotate(XMVectorSet(0, 1, 0, 0), q);
+			const XMVECTOR uz = XMVector3Rotate(XMVectorSet(0, 0, 1, 0), q);
+
+			const float ax = std::abs(XMVectorGetX(ux));
+			const float ay = std::abs(XMVectorGetX(uy));
+			const float az = std::abs(XMVectorGetX(uz));
+
+			float extX = ax * ex + ay * ey + az * ez;
+			extX += (collisionMargin + extra);
+
+			const float cx = XMVectorGetX(c);
+			minX = cx - extX;
+			maxX = cx + extX;
+
+			boundR = std::sqrt(ex * ex + ey * ey + ez * ez) + collisionMargin + extra;
+		}
+		else
+		{
+			// Capsule/Sphere: セグメント端点のX + r
+			XMVECTOR p0, p1;
+			float r = 0.0f;
+			makeCapsuleSegment(b, p0, p1, r);
+			r += (collisionMargin + extra);
+
+			const float x0 = XMVectorGetX(p0);
+			const float x1 = XMVectorGetX(p1);
+			minX = std::min(x0, x1) - r;
+			maxX = std::max(x0, x1) + r;
+
+			// sphere-check 用（既存の bound と同等）
+			const float capR = b.capsuleRadius * radiusScale;
+			boundR = b.capsuleHalfHeight + capR + collisionMargin + extra;
+		}
+
+		axisList[static_cast<size_t>(i)] = { minX, i };
+		maxXs[static_cast<size_t>(i)] = maxX;
+		radii[static_cast<size_t>(i)] = boundR;
 	}
 
-	// ソート (X軸上の最小座標順)
-	std::sort(axisList.begin(), axisList.end(), [](const SapNode& a, const SapNode& b) {
-		return a.minX < b.minX;
-			  });
+	std::sort(axisList.begin(), axisList.end(),
+			  [](const SapNode& a, const SapNode& b) { return a.minX < b.minX; });
 
-
-	// スイープ判定 (Sweep)
+	// Sweep
 	for (int i = 0; i < bodyCount; ++i)
 	{
-		int idxA = axisList[i].index;
-		float minX_A = axisList[i].minX;
-		float maxX_A = minX_A + 2.0f * radii[idxA];
+		const int idxA = axisList[static_cast<size_t>(i)].index;
+		const Body& A = m_bodies[static_cast<size_t>(idxA)];
+		const float maxX_A = maxXs[static_cast<size_t>(idxA)];
+		const XMVECTOR posA = Load3(A.position);
 
-		// 座標をロード (ループ内で再利用)
-		XMVECTOR posA = Load3(m_bodies[idxA].position);
-
-		// ソートされているため、重なりが終わった時点でbreak可能
 		for (int j = i + 1; j < bodyCount; ++j)
 		{
-			// ブロードフェーズの核心: X軸で重ならなければ即終了
-			if (axisList[j].minX > maxX_A) break;
+			if (axisList[static_cast<size_t>(j)].minX > maxX_A) break;
 
-			int idxB = axisList[j].index;
+			const int idxB = axisList[static_cast<size_t>(j)].index;
+			const Body& B = m_bodies[static_cast<size_t>(idxB)];
 
-			// Static同士は無視
-			if (m_bodies[idxA].invMass == 0.0f && m_bodies[idxB].invMass == 0.0f) continue;
-
-			// 高速な距離チェック (Distance Squared)
-			// Y軸, Z軸, および球判定を一気に行う
-			XMVECTOR posB = Load3(m_bodies[idxB].position);
-			float rSum = radii[idxA] + radii[idxB];
-
-			// ベクトル演算で一括判定
-			XMVECTOR diff = XMVectorSubtract(posA, posB);
-			if (XMVectorGetX(XMVector3LengthSq(diff)) > rSum * rSum) continue;
-
-			// フィルタリング (グループ、ジョイント接続)
-			if (!shouldCollide(idxA, idxB)) continue;
+			if (A.invMass <= 0.0f && B.invMass <= 0.0f) continue;
 			if (!m_settings.collideJointConnectedBodies && IsJointConnected(static_cast<uint32_t>(idxA), static_cast<uint32_t>(idxB))) continue;
+			if (!shouldCollide(idxA, idxB)) continue;
+
+			// 3D sphere check（保守的）
+			const XMVECTOR posB = Load3(B.position);
+			const XMVECTOR dp = XMVectorSubtract(posB, posA);
+			const float distSq = XMVectorGetX(XMVector3LengthSq(dp));
+			const float rs = radii[static_cast<size_t>(idxA)] + radii[static_cast<size_t>(idxB)];
+			if (distSq > rs * rs) continue;
 
 			candidates.push_back({ idxA, idxB });
 		}
 	}
 
+	s_candidateReserve = std::max(s_candidateReserve, candidates.size());
+	if (candidates.empty()) return;
+
 	for (int iter = 0; iter < m_settings.collisionIterations; ++iter)
 	{
 		for (const auto& pair : candidates)
 		{
-			Body& A = m_bodies[pair.a];
-			Body& B = m_bodies[pair.b];
+			Body& A = m_bodies[static_cast<size_t>(pair.a)];
+			Body& B = m_bodies[static_cast<size_t>(pair.b)];
 
-			XMVECTOR n; float penetration = 0.0f;
+			XMVECTOR n;
+			float penetration = 0.0f;
 			XMVECTOR cA, cB;
 
 			if (!computeContact(A, B, n, penetration, cA, cB)) continue;
@@ -1407,7 +1546,7 @@ void MmdPhysicsWorld::SolveBodyCollisions(float dt)
 				wAngB = Dot3(XMVectorMultiply(invI, rxn), rxn);
 			}
 
-			// Stabilization
+			// Stabilization (静止時の微振動抑制)
 			XMVECTOR vA_cur = XMVectorSubtract(Load3(A.position), Load3(A.prevPosition));
 			XMVECTOR vB_cur = XMVectorSubtract(Load3(B.position), Load3(B.prevPosition));
 			float vn = Dot3(XMVectorSubtract(vA_cur, vB_cur), n);
@@ -1424,19 +1563,21 @@ void MmdPhysicsWorld::SolveBodyCollisions(float dt)
 			XMVECTOR dp = XMVectorScale(n, dLambda);
 			XMVECTOR frictionImpulse = XMVectorZero();
 
-			// Friction
+			// Friction（位置差分ベース）
 			float mu = A.friction * B.friction;
 			if (mu > 0.0f)
 			{
 				XMVECTOR va = XMVectorSubtract(Load3(A.position), Load3(A.prevPosition));
 				XMVECTOR vb = XMVectorSubtract(Load3(B.position), Load3(B.prevPosition));
 				XMVECTOR vrel = XMVectorSubtract(va, vb);
+
 				XMVECTOR vnVec = XMVectorScale(n, Dot3(vrel, n));
 				XMVECTOR vt = XMVectorSubtract(vrel, vnVec);
 				float vtLen = Length3(vt);
+
 				if (vtLen > kEps)
 				{
-					if (vtLen < 0.05f * dt) mu *= 2.0f;
+					if (vtLen < 0.05f * dt) mu *= 2.0f; // Stiction
 					XMVECTOR tdir = XMVectorScale(vt, 1.0f / vtLen);
 					float mag = std::min(vtLen, dLambda * mu);
 					frictionImpulse = XMVectorScale(tdir, -mag);
