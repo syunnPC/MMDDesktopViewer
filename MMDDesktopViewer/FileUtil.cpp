@@ -41,22 +41,4 @@ namespace FileUtil
 		}
 		return true;
 	}
-
-	std::string LoadShader(const std::wstring& path)
-	{
-		std::string s;
-		std::string buf;
-		std::ifstream ifs(path);
-		if (!ifs)
-		{
-			return "";
-		}
-		while (std::getline(ifs, buf))
-		{
-			s += buf;
-			s += '\n';
-		}
-
-		return s;
-	}
 }

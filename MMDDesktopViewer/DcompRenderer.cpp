@@ -475,12 +475,62 @@ void DcompRenderer::CreateFxaaPipeline()
 	DX_CALL(m_ctx.Device()->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&m_fxaaRootSig)));
 
 	auto base = FileUtil::GetExecutableDir();
-	auto vs = FileUtil::LoadShader(base / L"Shaders\\FXAA_VS.hlsl");
-	auto ps = FileUtil::LoadShader(base / L"Shaders\\FXAA_PS.hlsl");
+	std::wstring psname = base / L"Shaders\\FXAA_PS.hlsl";
+	std::wstring vsname = base / L"Shaders\\FXAA_VS.hlsl";
+	std::wstring pscompiled = base / L"Shaders\\Compiled_FXAA_PS.cso";
+	std::wstring vscompiled = base / L"Shaders\\Compiled_FXAA_VS.cso";
 
 	Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob, err;
-	DX_CALL(D3DCompile(vs.c_str(), vs.size(), nullptr, nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vsBlob, &err));
-	DX_CALL(D3DCompile(ps.c_str(), ps.size(), nullptr, nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, &psBlob, &err));
+
+	HRESULT hr;
+
+	if (std::filesystem::exists(vscompiled))
+	{
+		hr = D3DReadFileToBlob(vscompiled.c_str(), &vsBlob);
+		if (FAILED(hr))
+		{
+			hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vsBlob, &err);
+		}
+	}
+	else
+	{
+		hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vsBlob, &err);
+	}
+
+	if (FAILED(hr))
+	{
+		if (errBlob) OutputDebugStringA(static_cast<char*>(err->GetBufferPointer()));
+		ThrowIfFailedEx(hr, "D3DCompile FXAA VS", FILENAME, __LINE__);
+	}
+
+	if (!std::filesystem::exists(vscompiled))
+	{
+		D3DWriteBlobToFile(vsBlob.Get(), vscompiled.c_str(), FALSE);
+	}
+
+	if (std::filesystem::exists(pscompiled))
+	{
+		hr = D3DReadFileToBlob(pscompiled.c_str(), &psBlob);
+		if (FAILED(hr))
+		{
+			hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &psBlob, &err);
+		}
+	}
+	else
+	{
+		hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &psBlob, &err);
+	}
+
+	if (FAILED(hr))
+	{
+		if (errBlob) OutputDebugStringA(static_cast<char*>(err->GetBufferPointer()));
+		ThrowIfFailedEx(hr, "D3DCompile FXAA PS", FILENAME, __LINE__);
+	}
+
+	if (!std::filesystem::exists(pscompiled))
+	{
+		D3DWriteBlobToFile(psBlob.Get(), pscompiled.c_str(), FALSE);
+	}
 
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
 	pso.pRootSignature = m_fxaaRootSig.Get();
@@ -1250,27 +1300,61 @@ void DcompRenderer::CreatePmxPipeline()
 	}
 
 	auto base = FileUtil::GetExecutableDir();
-	auto vs = FileUtil::LoadShader(base / L"Shaders\\PMX_VS.hlsl");
-	auto ps = FileUtil::LoadShader(base / L"Shaders\\PMX_PS.hlsl");
-	const char* vsSrc = vs.c_str();
-	const char* psSrc = ps.c_str();
+	std::wstring psname = base / L"Shaders\\PMX_PS.hlsl";
+	std::wstring vsname = base / L"Shaders\\PMX_VS.hlsl";
+	std::wstring pscompiled = base / L"Shaders\\Compiled_PMX_PS.cso";
+	std::wstring vscompiled = base / L"Shaders\\Compiled_PMX_VS.cso";
 
 	Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob, errBlob;
 
-	HRESULT hr = D3DCompile(vsSrc, strlen(vsSrc), nullptr, nullptr, nullptr,
-							"VSMain", "vs_5_0", 0, 0, &vsBlob, &errBlob);
-	if (FAILED(hr))
+	HRESULT hr;
+
+	if (std::filesystem::exists(vscompiled))
 	{
-		if (errBlob) OutputDebugStringA(static_cast<char*>(errBlob->GetBufferPointer()));
-		ThrowIfFailedEx(hr, "D3DCompile VS", FILENAME, __LINE__);
+		hr = D3DReadFileToBlob(vscompiled.c_str(), &vsBlob);
+		if (FAILED(hr))
+		{
+			hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vsBlob, &errBlob);
+		}
+	}
+	else
+	{
+		hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vsBlob, &errBlob);
 	}
 
-	hr = D3DCompile(psSrc, strlen(psSrc), nullptr, nullptr, nullptr,
-					"PSMain", "ps_5_0", 0, 0, &psBlob, &errBlob);
 	if (FAILED(hr))
 	{
 		if (errBlob) OutputDebugStringA(static_cast<char*>(errBlob->GetBufferPointer()));
-		ThrowIfFailedEx(hr, "D3DCompile PS", FILENAME, __LINE__);
+		ThrowIfFailedEx(hr, "D3DCompile PMX VS", FILENAME, __LINE__);
+	}
+
+	if (!std::filesystem::exists(vscompiled))
+	{
+		D3DWriteBlobToFile(vsBlob.Get(), vscompiled.c_str(), FALSE);
+	}
+
+	if (std::filesystem::exists(pscompiled))
+	{
+		hr = D3DReadFileToBlob(pscompiled.c_str(), &psBlob);
+		if (FAILED(hr))
+		{
+			hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, &psBlob, &errBlob);
+		}
+	}
+	else
+	{
+		hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, &psBlob, &errBlob);
+	}
+
+	if (FAILED(hr))
+	{
+		if (errBlob) OutputDebugStringA(static_cast<char*>(errBlob->GetBufferPointer()));
+		ThrowIfFailedEx(hr, "D3DCompile PMX PS", FILENAME, __LINE__);
+	}
+
+	if (!std::filesystem::exists(pscompiled))
+	{
+		D3DWriteBlobToFile(psBlob.Get(), pscompiled.c_str(), FALSE);
 	}
 
 	D3D12_INPUT_ELEMENT_DESC layout[] = {
@@ -1336,27 +1420,61 @@ void DcompRenderer::CreateEdgePipeline()
 	}
 
 	auto base = FileUtil::GetExecutableDir();
-	auto vs = FileUtil::LoadShader(base / L"Shaders\\Edge_VS.hlsl");
-	auto ps = FileUtil::LoadShader(base / L"Shaders\\Edge_PS.hlsl");
-	const char* vsSrc = vs.c_str();
-	const char* psSrc = ps.c_str();
+	std::wstring psname = base / L"Shaders\\Edge_PS.hlsl";
+	std::wstring vsname = base / L"Shaders\\Edge_VS.hlsl";
+	std::wstring pscompiled = base / L"Shaders\\Compiled_Edge_PS.cso";
+	std::wstring vscompiled = base / L"Shaders\\Compiled_Edge_VS.cso";
 
 	Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob, errBlob;
 
-	HRESULT hr = D3DCompile(vsSrc, strlen(vsSrc), nullptr, nullptr, nullptr,
-							"VSMain", "vs_5_0", 0, 0, &vsBlob, &errBlob);
+	HRESULT hr;
+
+	if (std::filesystem::exists(vscompiled))
+	{
+		hr = D3DReadFileToBlob(vscompiled.c_str(), &vsBlob);
+		if (FAILED(hr))
+		{
+			hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vsBlob, &errBlob);
+		}
+	}
+	else
+	{
+		hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vsBlob, &errBlob);
+	}
+
 	if (FAILED(hr))
 	{
 		if (errBlob) OutputDebugStringA(static_cast<char*>(errBlob->GetBufferPointer()));
 		ThrowIfFailedEx(hr, "D3DCompile Edge VS", FILENAME, __LINE__);
 	}
 
-	hr = D3DCompile(psSrc, strlen(psSrc), nullptr, nullptr, nullptr,
-					"PSMain", "ps_5_0", 0, 0, &psBlob, &errBlob);
+	if (!std::filesystem::exists(vscompiled))
+	{
+		D3DWriteBlobToFile(vsBlob.Get(), vscompiled.c_str(), FALSE);
+	}
+
+	if (std::filesystem::exists(pscompiled))
+	{
+		hr = D3DReadFileToBlob(pscompiled.c_str(), &psBlob);
+		if (FAILED(hr))
+		{
+			hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &psBlob, &errBlob);
+		}
+	}
+	else
+	{
+		hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &psBlob, &errBlob);
+	}
+
 	if (FAILED(hr))
 	{
 		if (errBlob) OutputDebugStringA(static_cast<char*>(errBlob->GetBufferPointer()));
 		ThrowIfFailedEx(hr, "D3DCompile Edge PS", FILENAME, __LINE__);
+	}
+
+	if (!std::filesystem::exists(pscompiled))
+	{
+		D3DWriteBlobToFile(psBlob.Get(), pscompiled.c_str(), FALSE);
 	}
 
 	D3D12_INPUT_ELEMENT_DESC layout[] = {
