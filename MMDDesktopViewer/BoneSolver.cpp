@@ -3,6 +3,26 @@
 #include <stdexcept>
 #include <functional>
 #include <cmath>
+#include <string>
+
+#ifndef BONESOLVER_DISABLE_FOOT_IK
+#define BONESOLVER_DISABLE_FOOT_IK 0
+#endif
+
+#ifndef BONESOLVER_DISABLE_TOE_IK
+#define BONESOLVER_DISABLE_TOE_IK 0
+#endif
+
+
+#ifndef BONESOLVER_MAX_IK_STEP_RAD
+// 1ステップの回転上限（rad）。小さすぎると膝が浅くなりやすい。
+#define BONESOLVER_MAX_IK_STEP_RAD 0.35f
+#endif
+
+#ifndef BONESOLVER_MAX_KNEE_DELTA_PER_FRAME_RAD
+// 膝(1軸制限リンク)のフレーム間の角度変化上限（rad）。
+#define BONESOLVER_MAX_KNEE_DELTA_PER_FRAME_RAD 0.65f
+#endif
 
 using namespace DirectX;
 
@@ -102,6 +122,80 @@ namespace
 		return v;
 	}
 
+	// 0.5rad(28.6度) を超える値は「度」とみなしてラジアンに変換する（既にラジアンの小値はそのまま）。
+	float NormalizeIkUnitAngle(float v)
+	{
+		float av = std::fabs(v);
+		if (!(av > 0.0f) || !std::isfinite(av)) return 0.0f;
+
+		// PMX内部はラジアンが基本（表示は度のことが多い）。
+		// ただし一部ツールが「度の数値」をそのまま格納するケースがあるため、
+		// 2π を大きく超える値だけ度→ラジアンへ変換する（2.0 や 4.0 はラジアンとして扱う）。
+		if (av > DirectX::XM_2PI && av <= 360.0f)
+		{
+			av = av * (DirectX::XM_PI / 180.0f);
+		}
+
+
+
+		// 1ステップ角を上限で抑える（過大だとスナップしやすい）
+		av = std::min(av, (float)BONESOLVER_MAX_IK_STEP_RAD);
+		return av;
+	}
+
+	inline bool IsToeIKName(const std::wstring& name)
+	{
+		return (name.find(L"つま先ＩＫ") != std::wstring::npos) || (name.find(L"つま先IK") != std::wstring::npos);
+	}
+	inline bool IsFootIKName(const std::wstring& name)
+	{
+		if (IsToeIKName(name)) return false;
+		return (name.find(L"足ＩＫ") != std::wstring::npos) || (name.find(L"足IK") != std::wstring::npos);
+	}
+
+	// クォータニオンの指数（回転を weight 倍する）。Slerp(identity, q, t) は t<0 で崩れるためこちらを使う。
+	DirectX::XMVECTOR QuaternionPow(DirectX::FXMVECTOR qIn, float t)
+	{
+		using namespace DirectX;
+
+		XMVECTOR q = XMQuaternionNormalize(qIn);
+
+		// 同一回転の符号反転を正規化（w>=0）して連続性を上げる
+		if (XMVectorGetW(q) < 0.0f)
+		{
+			q = XMVectorNegate(q);
+		}
+
+		// q = [v*sin(a), cos(a)]  (a = θ/2)
+		float w = XMVectorGetW(q);
+		w = std::clamp(w, -1.0f, 1.0f);
+
+		const float a = std::acos(w);
+		const float sinA = std::sin(a);
+
+		// ほぼ単位（角度0）
+		if (std::fabs(sinA) < 1.0e-8f)
+		{
+			return XMQuaternionIdentity();
+		}
+
+		XMVECTOR v = XMVectorSet(XMVectorGetX(q), XMVectorGetY(q), XMVectorGetZ(q), 0.0f);
+		XMVECTOR axis = XMVectorScale(v, 1.0f / sinA); // 正規化軸
+
+		const float a2 = a * t;
+		const float sinA2 = std::sin(a2);
+		const float cosA2 = std::cos(a2);
+
+		XMVECTOR out = XMVectorSet(
+			XMVectorGetX(axis) * sinA2,
+			XMVectorGetY(axis) * sinA2,
+			XMVectorGetZ(axis) * sinA2,
+			cosA2);
+
+		return XMQuaternionNormalize(out);
+	}
+
+
 	inline DirectX::XMVECTOR ClampIKRotationRobust(
 		DirectX::XMVECTOR q,
 		const DirectX::XMFLOAT3& limitMinIn,
@@ -117,7 +211,7 @@ namespace
 		auto processAxis = [&](float angle, float minLim, float maxLim) -> float {
 			if (std::abs(maxLim - minLim) < 1.0e-3f && std::abs(minLim) < 1.0e-3f)
 			{
-				// 強制的に 0 にする（軸ブレ防止の核心）
+				// 強制的に 0 にする（軸ブレ防止）
 				return 0.0f;
 			}
 
@@ -134,6 +228,23 @@ namespace
 		// 再びクォータニオンに戻す
 		return DirectX::XMQuaternionNormalize(EulerXYZToQuaternion(DirectX::XMLoadFloat3(&e)));
 	}
+
+	// axisXOnly 制限向け: クォータニオンからX軸ツイスト角を抽出（[-π, π]）
+	float ExtractTwistAngleX(DirectX::FXMVECTOR q)
+	{
+		DirectX::XMFLOAT4 f{};
+		DirectX::XMStoreFloat4(&f, DirectX::XMQuaternionNormalize(q));
+
+		// X軸まわり成分のみ（ツイスト）を取り出す
+		DirectX::XMVECTOR twist = DirectX::XMVectorSet(f.x, 0.0f, 0.0f, f.w);
+		twist = DirectX::XMQuaternionNormalize(twist);
+
+		DirectX::XMFLOAT4 t{};
+		DirectX::XMStoreFloat4(&t, twist);
+
+		return 2.0f * std::atan2(t.x, t.w);
+	}
+
 }
 
 void BoneSolver::Initialize(const PmxModel* model)
@@ -342,7 +453,7 @@ void BoneSolver::ApplyGrantToBone(size_t boneIndex)
 		XMVECTOR myRot = XMLoadFloat4(&state.localRotation);
 		XMVECTOR grantRot = XMLoadFloat4(&grantState.localRotation);
 
-		XMVECTOR grantRotScaled = XMQuaternionSlerp(XMQuaternionIdentity(), grantRot, bone.grantWeight);
+		XMVECTOR grantRotScaled = QuaternionPow(grantRot, bone.grantWeight);
 
 		myRot = XMQuaternionMultiply(myRot, grantRotScaled);
 		myRot = XMQuaternionNormalize(myRot);
@@ -366,12 +477,32 @@ void BoneSolver::ApplyGrantToBone(size_t boneIndex)
 
 void BoneSolver::SolveIK()
 {
+	// IKの評価順を安定化する：足IK → つま先IK
+	std::vector<size_t> ikList;
+	ikList.reserve(m_sortedBoneOrder.size());
 	for (size_t idx : m_sortedBoneOrder)
 	{
-		if (m_bones[idx].IsIK())
-		{
-			SolveIKBone(idx);
-		}
+		if (m_bones[idx].IsIK()) ikList.push_back(idx);
+	}
+
+	std::stable_sort(ikList.begin(), ikList.end(), [&](size_t a, size_t b)
+					 {
+						 const bool aToe = IsToeIKName(m_bones[a].name);
+						 const bool bToe = IsToeIKName(m_bones[b].name);
+						 return (aToe == bToe) ? (a < b) : (!aToe && bToe);
+					 });
+
+	for (size_t idx : ikList)
+	{
+		const auto& bone = m_bones[idx];
+
+#if BONESOLVER_DISABLE_TOE_IK
+		if (IsToeIKName(bone.name)) continue;
+#endif
+#if BONESOLVER_DISABLE_FOOT_IK
+		if (IsFootIKName(bone.name)) continue;
+#endif
+		SolveIKBone(idx);
 	}
 }
 
@@ -417,7 +548,7 @@ void BoneSolver::UpdateBoneTransform(size_t boneIndex)
 		if (bone.HasRotationGrant())
 		{
 			XMVECTOR grantRot = XMLoadFloat4(&grantState.localRotation);
-			XMVECTOR grantRotScaled = XMQuaternionSlerp(XMQuaternionIdentity(), grantRot, bone.grantWeight);
+			XMVECTOR grantRotScaled = QuaternionPow(grantRot, bone.grantWeight);
 			rotation = XMQuaternionMultiply(rotation, grantRotScaled);
 			rotation = XMQuaternionNormalize(rotation);
 		}
@@ -465,10 +596,8 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 	const size_t targetIdx = static_cast<size_t>(ikBone.ikTargetIndex);
 	if (targetIdx >= m_bones.size()) return;
 
-	XMMATRIX ikGlobal = XMLoadFloat4x4(&m_boneStates[boneIndex].globalMatrix);
-	XMVECTOR destPos = ikGlobal.r[3];
-
-	float limitAngle = MaybeDegreesToRadians(ikBone.ikLimitAngle);
+	// IKループ設定
+	float limitAngle = NormalizeIkUnitAngle(ikBone.ikLimitAngle);
 	if (limitAngle <= 0.0f) limitAngle = DirectX::XM_PI;
 	const int loopCount = ikBone.ikLoopCount;
 
@@ -482,12 +611,126 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 			const size_t currIdx = static_cast<size_t>(link.boneIndex);
 			if (currIdx >= m_bones.size()) continue;
 
+			// --- 現在の状態取得 ---
+			XMMATRIX destGlobal = XMLoadFloat4x4(&m_boneStates[boneIndex].globalMatrix);
+			XMVECTOR destPos = destGlobal.r[3];
+
 			XMMATRIX targetGlobal = XMLoadFloat4x4(&m_boneStates[targetIdx].globalMatrix);
 			XMVECTOR currPos = targetGlobal.r[3];
 
 			XMMATRIX linkGlobal = XMLoadFloat4x4(&m_boneStates[currIdx].globalMatrix);
 			XMVECTOR linkPos = linkGlobal.r[3];
 
+			XMMATRIX parentGlobal = XMMatrixIdentity();
+			int parentIndex = m_bones[currIdx].parentIndex;
+			if (parentIndex >= 0 && static_cast<size_t>(parentIndex) < m_bones.size())
+			{
+				parentGlobal = XMLoadFloat4x4(&m_boneStates[parentIndex].globalMatrix);
+			}
+			XMMATRIX parentInv = XMMatrixInverse(nullptr, parentGlobal);
+
+			// --- 1軸制限（膝など）の判定 ---
+			bool hasLimit = link.hasLimit;
+			XMFLOAT3 limMin = link.limitMin;
+			XMFLOAT3 limMax = link.limitMax;
+			const float eps = 1.0e-3f;
+
+			// X軸のみに制限がある関節か判定
+			bool isAxisXOnly = hasLimit &&
+				(std::abs(limMin.y) < eps && std::abs(limMax.y) < eps) &&
+				(std::abs(limMin.z) < eps && std::abs(limMax.z) < eps);
+
+			if (isAxisXOnly)
+			{
+				XMVECTOR toDest = XMVectorSubtract(destPos, linkPos);
+				XMVECTOR toCurr = XMVectorSubtract(currPos, linkPos);
+
+				// 親空間（ボーンローカル空間）へ変換
+				XMVECTOR localDirDest = XMVector3TransformNormal(toDest, parentInv);
+				XMVECTOR localDirCurr = XMVector3TransformNormal(toCurr, parentInv);
+
+				// X成分を無視してYZ平面に投影し、正規化
+				localDirDest = XMVectorSetX(localDirDest, 0.0f);
+				localDirCurr = XMVectorSetX(localDirCurr, 0.0f);
+
+				{
+					// 伸び切り付近では投影ベクトルの長さが小さくなりやすい。
+					// 正規化するとノイズが増幅して角度が跳ぶので、正規化せずに atan2 で角度を得る。
+					const float lenDestSq = XMVectorGetX(XMVector3LengthSq(localDirDest));
+					const float lenCurrSq = XMVectorGetX(XMVector3LengthSq(localDirCurr));
+					if (lenDestSq <= 1.0e-12f || lenCurrSq <= 1.0e-12f)
+					{
+						// ここで全方向IKに落とすと不要な回転が混入してスパイクになりやすいので、リンク回転をスキップする。
+						continue;
+					}
+
+					// Cross積(X成分) = Y*Z' - Z*Y'
+					float crossX = XMVectorGetX(XMVector3Cross(localDirCurr, localDirDest));
+					float dot = XMVectorGetX(XMVector3Dot(localDirCurr, localDirDest));
+					float deltaAngle = std::atan2(crossX, dot);
+					deltaAngle = std::clamp(deltaAngle, -limitAngle, limitAngle);
+
+					// 2. 現在の角度(X軸)を取得 (スカラー)
+					auto& linkState = m_boneStates[currIdx];
+					XMVECTOR currentQ = XMLoadFloat4(&linkState.localRotation);
+					float currentAngle = ExtractTwistAngleX(currentQ);
+
+					// 3. 角度のUnwrapping 
+					//    制限範囲の中心を基準に、現在の角度を ±180度以内に補正します。
+					//    例: 制限[-180, 0] のとき、+179度が来たら -181度 と解釈させる。
+					float minRad = MaybeDegreesToRadians(limMin.x);
+					float maxRad = MaybeDegreesToRadians(limMax.x);
+					if (minRad > maxRad) std::swap(minRad, maxRad);
+
+					float center = (minRad + maxRad) * 0.5f;
+					float ref = center;
+					if (m_hasLastIkLimitedEuler[currIdx]) ref = m_lastIkLimitedEuler[currIdx].x;
+					currentAngle = WrapAngleNear(currentAngle, ref);
+
+					// 4. 足し算して次の角度を求める
+					float targetAngle = currentAngle + deltaAngle;
+
+					// 5. 制限範囲でクランプ
+					targetAngle = std::clamp(targetAngle, minRad, maxRad);
+					// フレーム間のスパイク抑制：誤差が小さいのに解だけが切り替わるケースを抑える
+					if (m_hasLastIkLimitedEuler[currIdx])
+					{
+						const float prev = m_lastIkLimitedEuler[currIdx].x;
+						float ta = WrapAngleNear(targetAngle, prev);
+						const float err = std::sqrt(std::max(0.0f, XMVectorGetX(XMVector3LengthSq(XMVectorSubtract(destPos, currPos)))));
+						float maxDelta = (float)BONESOLVER_MAX_KNEE_DELTA_PER_FRAME_RAD;
+						if (err > 0.05f) maxDelta = DirectX::XM_PI;
+						else if (err > 0.02f) maxDelta = 1.2f;
+						else if (err > 0.01f) maxDelta = 0.9f;
+						float d = ta - prev;
+						d = std::clamp(d, -maxDelta, +maxDelta);
+						targetAngle = std::clamp(prev + d, minRad, maxRad);
+					}
+
+
+					// 6. 新しい角度からクォータニオンを作成して適用
+					XMVECTOR newRot = XMQuaternionRotationAxis(XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f), targetAngle);
+					XMStoreFloat4(&linkState.localRotation, newRot);
+					m_lastIkLimitedEuler[currIdx].x = targetAngle;
+					m_hasLastIkLimitedEuler[currIdx] = 1;
+
+
+					UpdateGlobalMatrixRecursive(currIdx);
+
+					// 収束判定
+					targetGlobal = XMLoadFloat4x4(&m_boneStates[targetIdx].globalMatrix);
+					currPos = targetGlobal.r[3];
+					if (XMVectorGetX(XMVector3LengthSq(XMVectorSubtract(destPos, currPos))) < 1.0e-6f)
+					{
+						loop = loopCount;
+						break;
+					}
+
+					continue;
+				}
+
+			}
+						// --- 通常の全方向IK (標準ロジック) ---
 			XMVECTOR toDest = XMVectorSubtract(destPos, linkPos);
 			XMVECTOR toCurr = XMVectorSubtract(currPos, linkPos);
 
@@ -502,49 +745,61 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 			float dot = XMVectorGetX(XMVector3Dot(toDest, toCurr));
 			dot = std::clamp(dot, -1.0f, 1.0f);
 
-			float angle = std::acos(dot);
+			// acos(dot) は dot≒±1 で不安定なので atan2(||cross||, dot) を使う
+			XMVECTOR axis = XMVector3Cross(toCurr, toDest);
+			const float axisLenSq = XMVectorGetX(XMVector3LengthSq(axis));
+			const float axisLen = std::sqrt(std::max(axisLenSq, 0.0f));
+			float angle = std::atan2(axisLen, dot);
+
 			if (angle < 1e-4f) continue;
 			if (angle > limitAngle) angle = limitAngle;
 
-			XMVECTOR axis = XMVector3Cross(toCurr, toDest);
-			if (XMVectorGetX(XMVector3LengthSq(axis)) < 1e-6f) continue;
-			axis = XMVector3Normalize(axis);
-
-			XMMATRIX parentGlobal = XMMatrixIdentity();
-			int parentIndex = m_bones[currIdx].parentIndex;
-			if (parentIndex >= 0 && static_cast<size_t>(parentIndex) < m_bones.size())
+			// 反対向き付近（dot≒-1）で cross が極小だと軸が不定になるので、安定軸を選ぶ
+			if (axisLenSq < 1.0e-10f)
 			{
-				parentGlobal = XMLoadFloat4x4(&m_boneStates[parentIndex].globalMatrix);
+				if (dot > 0.0f) continue; // ほぼ同方向（回転不要）
+
+				XMVECTOR base = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+				if (std::fabs(XMVectorGetX(XMVector3Dot(toCurr, base))) > 0.99f)
+				{
+					base = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+				}
+
+				axis = XMVector3Cross(toCurr, base);
+				if (XMVectorGetX(XMVector3LengthSq(axis)) < 1.0e-12f) continue;
+				axis = XMVector3Normalize(axis);
 			}
-
-			XMMATRIX parentInv = XMMatrixInverse(nullptr, parentGlobal);
+			else
+			{
+				axis = XMVector3Normalize(axis);
+			}
 			XMVECTOR localAxis = XMVector3TransformNormal(axis, parentInv);
-
 			if (XMVectorGetX(XMVector3LengthSq(localAxis)) < 1e-8f) continue;
 			localAxis = XMVector3Normalize(localAxis);
 
 			XMVECTOR deltaRot = XMQuaternionRotationAxis(localAxis, angle);
 
+			// --- 回転の適用と制限 ---
 			auto& linkState = m_boneStates[currIdx];
 			XMVECTOR currentRot = XMLoadFloat4(&linkState.localRotation);
 
 			currentRot = XMQuaternionMultiply(currentRot, deltaRot);
 			currentRot = XMQuaternionNormalize(currentRot);
 
-			if (link.hasLimit)
+			if (hasLimit)
 			{
 				currentRot = ClampIKRotationRobust(currentRot, link.limitMin, link.limitMax);
 			}
 
 			XMStoreFloat4(&linkState.localRotation, currentRot);
 
+			// 行列更新
 			UpdateGlobalMatrixRecursive(currIdx);
 
+			// 収束判定
 			targetGlobal = XMLoadFloat4x4(&m_boneStates[targetIdx].globalMatrix);
 			currPos = targetGlobal.r[3];
-
-			float dist = XMVectorGetX(XMVector3Length(XMVectorSubtract(destPos, currPos)));
-			if (dist < 1e-3f)
+			if (XMVectorGetX(XMVector3LengthSq(XMVectorSubtract(destPos, currPos))) < 1.0e-6f)
 			{
 				loop = loopCount;
 				break;
