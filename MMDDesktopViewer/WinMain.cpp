@@ -22,6 +22,14 @@ static std::wstring Utf8ToW(const char* s)
 
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int)
 {
+#ifdef __AVX2__
+	if (!IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE))
+	{
+		MessageBoxW(nullptr, L"このプロセッサーではAVX2命令セットが利用できません。", L"MMDDesk", MB_ICONERROR);
+		return 0;
+	}
+#endif
+
 	try
 	{
 		App app{ hInstance };

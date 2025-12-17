@@ -207,7 +207,6 @@ private:
 	void BeginSubStep();
 	void Integrate(float dt, const PmxModel& model);
 	void SolveXPBD(float dt, const PmxModel& model);
-	void SolveBodyCollisionsIteration(float dt, int iterIndex);
 	void SolveBodyCollisions(float dt);
 	void SolveGround(float dt, const PmxModel& model);
 	void SolveJoints(float dt);
