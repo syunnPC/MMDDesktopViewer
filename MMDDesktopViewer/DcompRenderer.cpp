@@ -2172,11 +2172,6 @@ DcompRenderer::CreateTexture2DFromRgba(const uint8_t* rgba, uint32_t width, uint
 	return tex;
 }
 
-void DcompRenderer::ExecuteAndWaitForUpload()
-{
-	WaitForGpu();
-}
-
 void DcompRenderer::CreateUploadObjects()
 {
 	if (m_uploadAlloc && m_uploadCmdList) return;

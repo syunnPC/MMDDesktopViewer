@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <cstdint>
 #include <DirectXMath.h>
+#include <atomic>
 
 #include "WicTexture.hpp"
 #include "Dx12Context.hpp"
@@ -80,7 +81,7 @@ private:
 	Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_alloc[FrameCount];
 	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_cmdList;
 	Microsoft::WRL::ComPtr<ID3D12Fence> m_fence;
-	UINT64 m_fenceValue{};
+	std::atomic<UINT64> m_fenceValue{};
 	HANDLE m_fenceEvent{};
 
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
@@ -231,8 +232,6 @@ private:
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> CreateTexture2DFromRgba(
 		const uint8_t* rgba, uint32_t width, uint32_t height);
-
-	void ExecuteAndWaitForUpload();
 
 	Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_uploadAlloc;
 	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_uploadCmdList;

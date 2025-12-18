@@ -292,6 +292,10 @@ void MmdAnimator::Tick(double dtSeconds)
 			{
 				trans.x = 0.0f; trans.z = 0.0f;
 			}
+			else if (track.name == L"グルーブ")
+			{
+				trans.x = 0.0f; trans.z = 0.0f;
+			}
 
 			// 結果を格納
 			m_pose.boneTranslations[track.name] = trans;

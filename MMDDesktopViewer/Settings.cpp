@@ -156,7 +156,7 @@ namespace
 AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
 								  const std::filesystem::path& defaultModelPath)
 {
-	AppSettings settings;
+	AppSettings settings{};
 	settings.modelPath = defaultModelPath;
 	settings.alwaysOnTop = true;
 
