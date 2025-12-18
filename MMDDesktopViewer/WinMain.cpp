@@ -146,7 +146,10 @@ static void RelaunchWithOpenMpPassiveIfNeeded()
 
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int)
 {
-	RelaunchWithOpenMpPassiveIfNeeded();
+	if (!IsDebuggerPresent())
+	{
+		RelaunchWithOpenMpPassiveIfNeeded();
+	}
 
 #ifdef __AVX2__
 	if (!IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE))
