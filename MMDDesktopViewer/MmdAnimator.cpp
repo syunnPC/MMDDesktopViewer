@@ -131,6 +131,53 @@ void MmdAnimator::Update()
 	Tick(dt);
 }
 
+void MmdAnimator::UpdateMotionCache(const VmdMotion* motion)
+{
+	// キャッシュが有効なら何もしない
+	if (motion && m_cachedMotionPtr == motion && m_model &&
+		m_boneTrackToBoneIndex.size() == motion->BoneTracks().size() &&
+		m_morphTrackToMorphIndex.size() == motion->MorphTracks().size())
+	{
+		return;
+	}
+
+	m_cachedMotionPtr = motion;
+	m_boneTrackToBoneIndex.clear();
+	m_morphTrackToMorphIndex.clear();
+	m_boneKeyCursors.clear();
+	m_morphKeyCursors.clear();
+
+	if (!motion || !m_model) return;
+
+	// --- ボーンのマッピング ---
+	const auto& boneTracks = motion->BoneTracks();
+	const auto& bones = m_model->Bones();
+
+	m_boneTrackToBoneIndex.resize(boneTracks.size(), -1);
+	m_boneKeyCursors.resize(boneTracks.size(), 0);
+
+	// 名前検索用マップを作成 (O(N) + O(M))
+	std::unordered_map<std::wstring, int> boneMap;
+	boneMap.reserve(bones.size());
+	for (int i = 0; i < (int)bones.size(); ++i)
+	{
+		boneMap[bones[i].name] = i;
+	}
+
+	for (size_t i = 0; i < boneTracks.size(); ++i)
+	{
+		auto it = boneMap.find(boneTracks[i].name);
+		if (it != boneMap.end())
+		{
+			m_boneTrackToBoneIndex[i] = it->second;
+		}
+	}
+
+	const auto& morphTracks = motion->MorphTracks();
+	m_morphTrackToMorphIndex.resize(morphTracks.size(), -1);
+	m_morphKeyCursors.resize(morphTracks.size(), 0);
+}
+
 void MmdAnimator::Tick(double dtSeconds)
 {
 	if (m_paused) return;
@@ -143,6 +190,10 @@ void MmdAnimator::Tick(double dtSeconds)
 	}
 
 	const VmdMotion* motion = m_motion.get();
+
+	// キャッシュ更新 (高速)
+	UpdateMotionCache(motion);
+
 	const float currentFrameRaw = static_cast<float>(m_time * m_fps);
 	float currentFrame = 0.0f;
 	if (motion)
@@ -151,138 +202,146 @@ void MmdAnimator::Tick(double dtSeconds)
 		currentFrame = NormalizeFrame(currentFrameRaw, maxFrame);
 	}
 
+	// 物理リセット判定 (シークやループ時のスパイク対策)
+	if (motion && m_prevFrameForPhysicsValid)
+	{
+		if (currentFrame + 0.5f < m_prevFrameForPhysics ||
+			std::abs(currentFrame - m_prevFrameForPhysics) > 10.0f)
+		{
+			if (m_physicsWorld) m_physicsWorld->Reset();
+		}
+	}
+
+	// ポーズ初期化
+	// 文字列マップへのクリアはコストがかかるため、必要な場合のみ行う設計も考えられますが、
+	// 安全のためクリアします。
 	m_pose.boneTranslations.clear();
 	m_pose.boneRotations.clear();
 	m_pose.morphWeights.clear();
 	m_pose.frame = currentFrame;
 
-	bool resetPhysics = false;
-
-	// ループ検知: 前フレームより明確に戻った（例: max付近→0付近）
-	if (motion && m_prevFrameForPhysicsValid)
-	{
-		// 0.5f はノイズ閾値
-		if (currentFrame + 0.5f < m_prevFrameForPhysics)
-			resetPhysics = true;
-
-		// ついでに「大ジャンプ」もReset（シークやdtスパイク対策）
-		if (std::abs(currentFrame - m_prevFrameForPhysics) > 10.0f)
-			resetPhysics = true;
-	}
-
-	if (resetPhysics && m_physicsWorld)
-	{
-		m_physicsWorld->Reset(); // 次の Step() で BuildFromModel される
-	}
-
-	auto sampleBone = [&](const VmdMotion::BoneTrack& track) {
-		if (track.keys.empty()) return;
-		const auto& keys = track.keys;
-
-		const VmdMotion::BoneKey* k0 = &keys.front();
-		const VmdMotion::BoneKey* k1 = &keys.back();
-
-		for (size_t i = 0; i + 1 < keys.size(); ++i)
-		{
-			if (keys[i + 1].frame >= currentFrame)
-			{
-				k0 = &keys[i];
-				k1 = &keys[i + 1];
-				break;
-			}
-		}
-
-		float t = 0.0f;
-		if (k1->frame != k0->frame)
-		{
-			t = (currentFrame - static_cast<float>(k0->frame)) /
-				static_cast<float>(k1->frame - k0->frame);
-			t = std::clamp(t, 0.0f, 1.0f);
-		}
-
-		const std::uint8_t* base = k0->interp;
-		float txT = EvaluateChannelT(base + 0, t);
-		float tyT = EvaluateChannelT(base + 16, t);
-		float tzT = EvaluateChannelT(base + 32, t);
-		float rotT = EvaluateChannelT(base + 48, t);
-
-		auto lerp = [](float a, float b, float s) { return a + (b - a) * s; };
-
-		DirectX::XMFLOAT3 trans{
-			lerp(k0->tx, k1->tx, txT),
-			lerp(k0->ty, k1->ty, tyT),
-			lerp(k0->tz, k1->tz, tzT)
-		};
-
-		DirectX::XMVECTOR q0 = DirectX::XMQuaternionNormalize(
-			DirectX::XMVectorSet(k0->qx, k0->qy, k0->qz, k0->qw));
-		DirectX::XMVECTOR q1 = DirectX::XMQuaternionNormalize(
-			DirectX::XMVectorSet(k1->qx, k1->qy, k1->qz, k1->qw));
-		DirectX::XMVECTOR q = DirectX::XMQuaternionSlerp(q0, q1, rotT);
-		DirectX::XMFLOAT4 rot;
-		DirectX::XMStoreFloat4(&rot, q);
-
-		if (track.name == L"全ての親")
-		{
-			trans = { 0.0f, 0.0f, 0.0f };
-		}
-		else if (track.name == L"センター")
-		{
-			trans.x = 0.0f;
-			trans.z = 0.0f;
-		}
-
-		m_pose.boneTranslations[track.name] = trans;
-		m_pose.boneRotations[track.name] = rot;
-		};
-
 	if (motion)
 	{
-		for (const auto& track : motion->BoneTracks())
-		{
-			sampleBone(track);
-		}
-	}
+		// --- ボーンアニメーション適用 ---
+		const auto& boneTracks = motion->BoneTracks();
+		const size_t numBoneTracks = boneTracks.size();
 
-	auto sampleMorph = [&](const VmdMotion::MorphTrack& track) {
-		if (track.keys.empty()) return;
-		const auto& keys = track.keys;
-		const VmdMotion::MorphKey* k0 = &keys.front();
-		const VmdMotion::MorphKey* k1 = &keys.back();
-		for (size_t i = 0; i + 1 < keys.size(); ++i)
+		// 多くのトラックがあるため並列化も視野に入るが、std::mapへの書き込みがあるためシングルスレッド推奨
+		for (size_t i = 0; i < numBoneTracks; ++i)
 		{
-			if (keys[i + 1].frame >= currentFrame)
+			// モデルに存在しないボーンはスキップ (キャッシュ利用)
+			if (m_boneTrackToBoneIndex[i] == -1) continue;
+
+			const auto& track = boneTracks[i];
+			const auto& keys = track.keys;
+			if (keys.empty()) continue;
+
+			// キーフレーム探索 (キャッシュされたカーソルを利用して高速化)
+			size_t kIdx = m_boneKeyCursors[i];
+
+			// カーソル位置の妥当性チェックと巻き戻し
+			if (kIdx >= keys.size() - 1) kIdx = 0;
+			if (keys[kIdx].frame > currentFrame) kIdx = 0;
+
+			// 線形探索 (開始位置が正しければ数回の反復で済む)
+			while (kIdx + 1 < keys.size() && keys[kIdx + 1].frame <= currentFrame)
 			{
-				k0 = &keys[i];
-				k1 = &keys[i + 1];
-				break;
+				kIdx++;
 			}
+			m_boneKeyCursors[i] = kIdx; // カーソル更新
+
+			const auto& k0 = keys[kIdx];
+			const auto* k1 = (kIdx + 1 < keys.size()) ? &keys[kIdx + 1] : &k0;
+
+			float t = 0.0f;
+			if (k1->frame != k0.frame)
+			{
+				t = (currentFrame - static_cast<float>(k0.frame)) /
+					static_cast<float>(k1->frame - k0.frame);
+				t = std::clamp(t, 0.0f, 1.0f);
+			}
+
+			// 補間計算
+			const std::uint8_t* base = k0.interp;
+			float txT = EvaluateChannelT(base + 0, t);
+			float tyT = EvaluateChannelT(base + 16, t);
+			float tzT = EvaluateChannelT(base + 32, t);
+			float rotT = EvaluateChannelT(base + 48, t);
+
+			auto lerp = [](float a, float b, float s) { return a + (b - a) * s; };
+
+			DirectX::XMFLOAT3 trans{
+				lerp(k0.tx, k1->tx, txT),
+				lerp(k0.ty, k1->ty, tyT),
+				lerp(k0.tz, k1->tz, tzT)
+			};
+
+			using namespace DirectX;
+			XMVECTOR q0 = XMQuaternionNormalize(XMVectorSet(k0.qx, k0.qy, k0.qz, k0.qw));
+			XMVECTOR q1 = XMQuaternionNormalize(XMVectorSet(k1->qx, k1->qy, k1->qz, k1->qw));
+			XMVECTOR q = XMQuaternionSlerp(q0, q1, rotT);
+			XMFLOAT4 rot;
+			XMStoreFloat4(&rot, q);
+
+			// 特殊ボーン名の処理
+			if (track.name == L"全ての親")
+			{
+				trans = { 0.0f, 0.0f, 0.0f };
+			}
+			else if (track.name == L"センター")
+			{
+				trans.x = 0.0f; trans.z = 0.0f;
+			}
+
+			// 結果を格納
+			m_pose.boneTranslations[track.name] = trans;
+			m_pose.boneRotations[track.name] = rot;
 		}
 
-		float t = 0.0f;
-		if (k1->frame != k0->frame)
-		{
-			t = (currentFrame - static_cast<float>(k0->frame)) /
-				static_cast<float>(k1->frame - k0->frame);
-			t = std::clamp(t, 0.0f, 1.0f);
-		}
-		float w = k0->weight + (k1->weight - k0->weight) * t;
-		m_pose.morphWeights[track.name] = w;
-		};
+		// --- モーフアニメーション適用 ---
+		const auto& morphTracks = motion->MorphTracks();
+		const size_t numMorphTracks = morphTracks.size();
 
-	if (motion)
-	{
-		for (const auto& track : motion->MorphTracks())
+		for (size_t i = 0; i < numMorphTracks; ++i)
 		{
-			sampleMorph(track);
+			// モーフインデックスが無効でもポーズには反映させる必要があるため、
+			// ボーンのようなスキップは慎重に行う必要があるが、今回は全トラック処理する方針とする
+
+			const auto& track = morphTracks[i];
+			const auto& keys = track.keys;
+			if (keys.empty()) continue;
+
+			size_t kIdx = m_morphKeyCursors[i];
+			if (kIdx >= keys.size() - 1) kIdx = 0;
+			if (keys[kIdx].frame > currentFrame) kIdx = 0;
+
+			while (kIdx + 1 < keys.size() && keys[kIdx + 1].frame <= currentFrame)
+			{
+				kIdx++;
+			}
+			m_morphKeyCursors[i] = kIdx;
+
+			const auto& k0 = keys[kIdx];
+			const auto* k1 = (kIdx + 1 < keys.size()) ? &keys[kIdx + 1] : &k0;
+
+			float t = 0.0f;
+			if (k1->frame != k0.frame)
+			{
+				t = (currentFrame - static_cast<float>(k0.frame)) /
+					static_cast<float>(k1->frame - k0.frame);
+				t = std::clamp(t, 0.0f, 1.0f);
+			}
+
+			float w = k0.weight + (k1->weight - k0.weight) * t;
+			m_pose.morphWeights[track.name] = w;
 		}
 	}
 
-	// ボーンソルバーでスキニング行列を計算
+	// 行列更新 (FK)
 	m_boneSolver->ApplyPose(m_pose);
-	m_boneSolver->UpdateMatrices();
+	m_boneSolver->UpdateMatrices(); // ここでIKも解決される
 
-	// 見た目寄りの最小物理 (剛体/ジョイントがあるモデルのみ)
+	// 物理演算
 	if (m_physicsEnabled && m_physicsWorld && m_model && !m_model->RigidBodies().empty())
 	{
 		if (!m_physicsWorld->IsBuilt() || m_physicsWorld->BuiltRevision() != m_model->Revision())
@@ -293,7 +352,7 @@ void MmdAnimator::Tick(double dtSeconds)
 		if (m_physicsWorld->IsBuilt())
 		{
 			m_physicsWorld->Step(dtSeconds, *m_model, *m_boneSolver);
-			// 物理の書き戻し後にスキニング行列だけ更新(IKは回さない)
+			// 物理適用後はIKを回さずに行列のみ更新
 			m_boneSolver->UpdateMatricesNoIK();
 		}
 	}

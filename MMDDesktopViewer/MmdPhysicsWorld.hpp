@@ -241,4 +241,32 @@ private:
 	bool m_worldSleeping{ false };
 
 	bool ShouldSkipPhysicsTick();
+
+	struct CollisionShapeCache
+	{
+		DirectX::XMVECTOR p0;
+		DirectX::XMVECTOR p1;
+		DirectX::XMVECTOR rotation;
+		float radius;
+		float ex, ey, ez;
+		bool isBox;
+	};
+	std::vector<CollisionShapeCache> m_shapeCache;
+
+	// 物理演算用ワークバッファ（毎回確保しないようにメンバ化）
+
+	struct SapPair
+	{
+		int a; int b;
+	};
+	std::vector<SapPair> m_candidates;
+
+	// SAP用バッファ
+	struct SapNode
+	{
+		float minX; int index;
+	};
+	std::vector<SapNode> m_axisList;
+	std::vector<float> m_radii;
+	std::vector<float> m_maxXs;
 };

@@ -112,4 +112,14 @@ private:
 
 	float m_prevFrameForPhysics{ 0.0f };
 	bool  m_prevFrameForPhysicsValid{ false };
+
+	// キャッシュ用メンバ変数
+	const VmdMotion* m_cachedMotionPtr = nullptr;
+	std::vector<int> m_boneTrackToBoneIndex;     // トラック番号 -> モデルのボーンIndex
+	std::vector<int> m_morphTrackToMorphIndex;   // トラック番号 -> モデルのモーフIndex
+	std::vector<size_t> m_boneKeyCursors;        // キーフレーム探索用カーソル
+	std::vector<size_t> m_morphKeyCursors;       // モーフキー探索用カーソル
+
+	// 内部メソッド定義
+	void UpdateMotionCache(const VmdMotion* motion);
 };

@@ -833,10 +833,18 @@ void BoneSolver::UpdateMatrices(bool solveIK)
 void BoneSolver::UpdateMatricesNoIK()
 {
 	for (size_t idx : m_sortedBoneOrder)
+	{
 		UpdateBoneTransform(idx);
+	}
 
-	for (size_t i = 0; i < m_bones.size(); ++i)
+	const size_t n = m_bones.size();
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(n >= 256)
+#endif
+	for (int i = 0; i < (int)n; ++i)
+	{
 		CalculateSkinningMatrix(i);
+	}
 }
 
 const DirectX::XMFLOAT4X4& BoneSolver::GetBoneGlobalMatrix(size_t boneIndex) const
