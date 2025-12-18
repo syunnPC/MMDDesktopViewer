@@ -126,6 +126,12 @@ App::~App()
 	if (m_renderWnd) UnregisterHotKey(m_renderWnd, kHotKeyToggleGizmoId);
 	if (m_renderWnd) UnregisterHotKey(m_renderWnd, kHotKeyTogglePhysicsId);
 	if (m_gizmoWnd) DestroyWindow(m_gizmoWnd);
+
+	// GDIリソースの解放
+	if (m_gizmoOldBmp && m_gizmoDc) SelectObject(m_gizmoDc, m_gizmoOldBmp);
+	if (m_gizmoBmp) DeleteObject(m_gizmoBmp);
+	if (m_gizmoDc) DeleteDC(m_gizmoDc);
+
 	if (m_comInitialized)
 	{
 		CoUninitialize();
@@ -435,7 +441,8 @@ void App::CreateGizmoWindow()
 		}
 	}
 
-	// 入力を受ける UI ウィンドウ（円形）
+	// 入力を受ける UI ウィンドウ
+	// WS_EX_LAYERED は UpdateLayeredWindow を使うために必須
 	const DWORD exStyle = WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_LAYERED;
 	const DWORD style = WS_POPUP;
 
@@ -452,12 +459,10 @@ void App::CreateGizmoWindow()
 		throw std::runtime_error("CreateWindowExW (GizmoWindow) failed.");
 	}
 
-	// 円形にする（ウィンドウ領域を楕円で設定）
-	HRGN rgn = CreateEllipticRgn(0, 0, kGizmoSizePx, kGizmoSizePx);
-	SetWindowRgn(m_gizmoWnd, rgn, TRUE);
+	// 以前の CreateEllipticRgn と SetLayeredWindowAttributes を削除
+	// これらはジャギーの原因となるため、UpdateLayeredWindow によるピクセル単位のアルファブレンドに移行します。
 
 	ShowWindow(m_gizmoWnd, SW_HIDE);
-	SetLayeredWindowAttributes(m_gizmoWnd, 0, 180, LWA_ALPHA);
 }
 
 void App::ToggleGizmoWindow()
@@ -517,73 +522,125 @@ void App::EnsureGizmoD2D()
 		}
 	}
 
-	RECT rc{};
-	GetClientRect(m_gizmoWnd, &rc);
-	const UINT w = static_cast<UINT>(std::max(1L, rc.right - rc.left));
-	const UINT h = static_cast<UINT>(std::max(1L, rc.bottom - rc.top));
+	// GDIリソース（ビットマップ、メモリDC）の作成
+	if (!m_gizmoDc)
+	{
+		HDC screenDc = GetDC(nullptr);
+		m_gizmoDc = CreateCompatibleDC(screenDc);
+		ReleaseDC(nullptr, screenDc);
+	}
 
+	if (!m_gizmoBmp)
+	{
+		BITMAPINFO bmi = {};
+		bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+		bmi.bmiHeader.biWidth = kGizmoSizePx;
+		bmi.bmiHeader.biHeight = -kGizmoSizePx; // Top-down
+		bmi.bmiHeader.biPlanes = 1;
+		bmi.bmiHeader.biBitCount = 32; // Alpha channelあり
+		bmi.bmiHeader.biCompression = BI_RGB;
+
+		// 32ビットビットマップを作成（初期値は0クリア＝透明）
+		m_gizmoBmp = CreateDIBSection(m_gizmoDc, &bmi, DIB_RGB_COLORS, &m_gizmoBits, nullptr, 0);
+		if (m_gizmoBmp)
+		{
+			m_gizmoOldBmp = SelectObject(m_gizmoDc, m_gizmoBmp);
+		}
+	}
+
+	// DCレンダーターゲットの作成
 	if (!m_gizmoRt)
 	{
-		D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps = D2D1::HwndRenderTargetProperties(
-			m_gizmoWnd,
-			D2D1::SizeU(w, h),
-			D2D1_PRESENT_OPTIONS_IMMEDIATELY);
+		D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+			D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+			D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+			0.0f, 0.0f,
+			D2D1_RENDER_TARGET_USAGE_NONE, 
+			D2D1_FEATURE_LEVEL_DEFAULT
+		);
 
-		HRESULT hr = m_d2dFactory->CreateHwndRenderTarget(
-			D2D1::RenderTargetProperties(),
-			hwndProps,
-			m_gizmoRt.GetAddressOf());
+		HRESULT hr = m_d2dFactory->CreateDCRenderTarget(&props, &m_gizmoRt);
 		if (FAILED(hr))
 		{
-			throw std::runtime_error("CreateHwndRenderTarget failed.");
+			throw std::runtime_error("CreateDCRenderTarget failed.");
 		}
 
 		m_gizmoRt->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
-		m_gizmoRt->CreateSolidColorBrush(D2D1::ColorF(0.08f, 0.08f, 0.08f), m_gizmoBrushFill.GetAddressOf());
-		m_gizmoRt->CreateSolidColorBrush(D2D1::ColorF(0.85f, 0.85f, 0.85f), m_gizmoBrushStroke.GetAddressOf());
+		// ブラシの作成 (アルファ値を調整して質感を向上)
+		// 塗りつぶし: 暗めのグレー、透過度60%程度
+		m_gizmoRt->CreateSolidColorBrush(D2D1::ColorF(0.08f, 0.08f, 0.08f, 0.6f), m_gizmoBrushFill.GetAddressOf());
+		// 枠線: 明るい白、透過度90%程度（くっきりさせる）
+		m_gizmoRt->CreateSolidColorBrush(D2D1::ColorF(0.85f, 0.85f, 0.85f, 0.9f), m_gizmoBrushStroke.GetAddressOf());
 	}
-	else
-	{
-		auto cur = m_gizmoRt->GetSize();
-		if (static_cast<UINT>(cur.width) != w || static_cast<UINT>(cur.height) != h)
-		{
-			m_gizmoRt->Resize(D2D1::SizeU(w, h));
-		}
-	}
+}
+
+void App::DiscardGizmoD2D()
+{
+	m_gizmoRt.Reset();
+	m_gizmoBrushFill.Reset();
+	m_gizmoBrushStroke.Reset();
 }
 
 void App::RenderGizmo()
 {
 	if (!m_gizmoVisible || !m_gizmoWnd) return;
 	EnsureGizmoD2D();
-	if (!m_gizmoRt) return;
+	if (!m_gizmoRt || !m_gizmoDc) return;
 
-	const D2D1_SIZE_F size = m_gizmoRt->GetSize();
-	const float cx = size.width * 0.5f;
-	const float cy = size.height * 0.5f;
-	const float radius = (std::min)(size.width, size.height) * 0.5f - 10.0f;
+	const float width = static_cast<float>(kGizmoSizePx);
+	const float height = static_cast<float>(kGizmoSizePx);
+	const float cx = width * 0.5f;
+	const float cy = height * 0.5f;
+	const float radius = (std::min)(width, height) * 0.5f - 2.0f; // 少し余白を持たせる
+
+	// DCをレンダーターゲットにバインド
+	RECT rc = { 0, 0, kGizmoSizePx, kGizmoSizePx };
+	HRESULT hr = m_gizmoRt->BindDC(m_gizmoDc, &rc);
+
+	if (FAILED(hr))
+	{
+		if (hr == D2DERR_RECREATE_TARGET) DiscardGizmoD2D();
+		return;
+	}
 
 	m_gizmoRt->BeginDraw();
-	// 背景
-	m_gizmoRt->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f));
+	m_gizmoRt->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
 
 	D2D1_ELLIPSE el = D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius);
 	m_gizmoRt->FillEllipse(el, m_gizmoBrushFill.Get());
-	m_gizmoRt->DrawEllipse(el, m_gizmoBrushStroke.Get(), 3.0f);
+	m_gizmoRt->DrawEllipse(el, m_gizmoBrushStroke.Get(), 2.0f); // 枠線を少し細くして上品に
 
 	// 目印（十字）
 	const float tick = radius * 0.55f;
 	m_gizmoRt->DrawLine(D2D1::Point2F(cx - tick, cy), D2D1::Point2F(cx + tick, cy), m_gizmoBrushStroke.Get(), 1.5f);
 	m_gizmoRt->DrawLine(D2D1::Point2F(cx, cy - tick), D2D1::Point2F(cx, cy + tick), m_gizmoBrushStroke.Get(), 1.5f);
 
-	HRESULT hr = m_gizmoRt->EndDraw();
+	hr = m_gizmoRt->EndDraw();
 	if (hr == D2DERR_RECREATE_TARGET)
 	{
-		m_gizmoRt.Reset();
-		m_gizmoBrushFill.Reset();
-		m_gizmoBrushStroke.Reset();
+		if (hr != D2DERR_RECREATE_TARGET)
+		{
+			OutputDebugStringW(std::format(L"EndDraw hr=0x{:08X}\n", (unsigned)hr).c_str());
+		}
+		DiscardGizmoD2D();
+		return;
 	}
+
+	// UpdateLayeredWindow で画面に反映 (ピクセル単位のアルファブレンド)
+	BLENDFUNCTION bf = {};
+	bf.BlendOp = AC_SRC_OVER;
+	bf.SourceConstantAlpha = 255;
+	bf.AlphaFormat = AC_SRC_ALPHA; // ピクセルのアルファ値を使用
+
+	POINT ptSrc = { 0, 0 };
+	SIZE wndSize = { kGizmoSizePx, kGizmoSizePx };
+
+	RECT wndRect;
+	GetWindowRect(m_gizmoWnd, &wndRect);
+	POINT ptDst = { wndRect.left, wndRect.top };
+
+	UpdateLayeredWindow(m_gizmoWnd, nullptr, &ptDst, &wndSize, m_gizmoDc, &ptSrc, 0, &bf, ULW_ALPHA);
 }
 
 void App::InitRenderer()
@@ -1112,7 +1169,11 @@ LRESULT App::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 					}
 				}
 
-				InvalidateRect(hWnd, nullptr, FALSE);
+				// RenderGizmo内でUpdateLayeredWindowを呼ぶので、InvalidateRectでWM_PAINTを飛ばさなくても
+				// 直接RenderGizmoを呼べば更新できますが、一貫性のためWM_PAINT経由か
+				// 負荷を考えてRenderGizmoを直接呼ぶことも可能です。
+				// ここではシンプルに再描画要求を出します。
+				RenderGizmo();
 				return 0;
 			}
 			break;

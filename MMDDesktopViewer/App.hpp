@@ -13,7 +13,7 @@
 
 class SettingsWindow;
 struct ID2D1Factory;
-struct ID2D1HwndRenderTarget;
+struct ID2D1DCRenderTarget; // HwndRenderTargetから変更
 struct ID2D1SolidColorBrush;
 
 class App
@@ -104,9 +104,15 @@ private:
 	POINT m_gizmoLastCursor{};
 
 	Microsoft::WRL::ComPtr<ID2D1Factory> m_d2dFactory;
-	Microsoft::WRL::ComPtr<ID2D1HwndRenderTarget> m_gizmoRt;
+	Microsoft::WRL::ComPtr<ID2D1DCRenderTarget> m_gizmoRt; // DCレンダーターゲットに変更
 	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_gizmoBrushFill;
 	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_gizmoBrushStroke;
+
+	// UpdateLayeredWindow用のGDIリソース
+	HDC m_gizmoDc{ nullptr };
+	HBITMAP m_gizmoBmp{ nullptr };
+	HGDIOBJ m_gizmoOldBmp{ nullptr };
+	void* m_gizmoBits{ nullptr };
 
 	bool m_draggingWindow{ false };
 	POINT m_dragStartCursor{};
@@ -135,4 +141,6 @@ private:
 	void ForceRenderTreeClickThrough();
 	static BOOL CALLBACK EnumChildForClickThrough(HWND hWnd, LPARAM lParam);
 	static void MakeClickThrough(HWND hWnd);
+
+	void DiscardGizmoD2D();
 };
