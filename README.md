@@ -22,7 +22,7 @@ C++/DirectX/DirectCompositionで開発している、デスクトップマスコ
 - **OS**: Windows 10 64ビット※
 - **CPU**: AVX2対応CPU※
 - **GPU**: DirectX 12対応GPU
-<br>※手動ビルドで変更できます
+<br>※手動ビルドで変更できます。32ビットでも実行可能です。
 
 # 変更履歴
 - 2025年12月13日 クリック透過処理と移動UIを実装
@@ -37,7 +37,8 @@ C++/DirectX/DirectCompositionで開発している、デスクトップマスコ
 - モデルの大きさの設定が保存されない
 - モデルを回転させると大きくなる
 - 膝や足の挙動がおかしい
-  - やや改善しましたが、それでも少し膝がカクっとなったりする可能性があります。 
+  - やや改善しましたが、それでも少し膝がカクっとなったりする可能性があります。
+- 32ビットビルドで色がおかしい部分がある
 
 # ライセンス
 本プロジェクトのソースコードは **Apache License 2.0** の下で公開されています。詳細は`LICENSE`ファイルを参照してください。
@@ -45,4 +46,5 @@ C++/DirectX/DirectCompositionで開発している、デスクトップマスコ
 # サードパーティーライセンス
 
 - `d3dx12.hpp`: MIT License (Copyright © Microsoft) https://github.com/microsoft/DirectX-Headers
+
 
