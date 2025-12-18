@@ -1724,8 +1724,16 @@ void MmdPhysicsWorld::SolveGround(float dt, const PmxModel& model)
 		? (m_settings.maxDepenetrationVelocity * dt)
 		: std::numeric_limits<float>::max();
 
-	for (auto& b : m_bodies)
+	// [最適化] 剛体ごとの地面判定は独立しているため並列化
+	const int n = static_cast<int>(m_bodies.size());
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(n >= 64)
+#endif
+	for (int i = 0; i < n; ++i)
 	{
+		// ループ変数をローカル参照で受ける
+		auto& b = m_bodies[i];
+
 		if (b.invMass <= 0.0f) continue;
 		if (!IsVectorFinite3(Load3(b.position))) continue;
 
@@ -1765,7 +1773,12 @@ void MmdPhysicsWorld::EndSubStep(float dt, const PmxModel& model)
 	(void)model;
 	float invDt = 1.0f / std::max(dt, kEps);
 
-	for (size_t i = 0; i < m_bodies.size(); ++i)
+	// [最適化] 速度更新ループの並列化
+	const int n = static_cast<int>(m_bodies.size());
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(n >= 64)
+#endif
+	for (int i = 0; i < n; ++i)
 	{
 		Body& b = m_bodies[i];
 		if (b.operation == PmxModel::RigidBody::OperationType::Static) continue;

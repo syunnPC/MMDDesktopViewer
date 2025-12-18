@@ -91,4 +91,6 @@ private:
 	std::vector<uint8_t>           m_hasLastIkLimitedEuler;
 
 	void UpdateBoneTransform(size_t boneIndex);
+
+	void UpdateChainGlobalMatrix(size_t boneIndex);
 };

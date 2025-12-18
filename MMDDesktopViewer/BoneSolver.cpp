@@ -477,32 +477,64 @@ void BoneSolver::ApplyGrantToBone(size_t boneIndex)
 
 void BoneSolver::SolveIK()
 {
-	// IKの評価順を安定化する：足IK → つま先IK
-	std::vector<size_t> ikList;
-	ikList.reserve(m_sortedBoneOrder.size());
+	// IKを依存関係と並列化の可否に基づいて分類
+	std::vector<size_t> footIKs;
+	std::vector<size_t> toeIKs;
+	std::vector<size_t> otherIKs;
+
+	footIKs.reserve(2);
+	toeIKs.reserve(2);
+	otherIKs.reserve(8);
+
+	// m_sortedBoneOrder（親順）を走査して分類
+	// これにより、各リスト内でも基本的な親順（ID順）が保たれる
 	for (size_t idx : m_sortedBoneOrder)
 	{
-		if (m_bones[idx].IsIK()) ikList.push_back(idx);
+		const auto& bone = m_bones[idx];
+		if (!bone.IsIK()) continue;
+
+		if (IsToeIKName(bone.name))
+		{
+			toeIKs.push_back(idx);
+		}
+		else if (IsFootIKName(bone.name))
+		{
+			footIKs.push_back(idx);
+		}
+		else
+		{
+			otherIKs.push_back(idx);
+		}
 	}
 
-	std::stable_sort(ikList.begin(), ikList.end(), [&](size_t a, size_t b)
-					 {
-						 const bool aToe = IsToeIKName(m_bones[a].name);
-						 const bool bToe = IsToeIKName(m_bones[b].name);
-						 return (aToe == bToe) ? (a < b) : (!aToe && bToe);
-					 });
-
-	for (size_t idx : ikList)
-	{
-		const auto& bone = m_bones[idx];
-
-#if BONESOLVER_DISABLE_TOE_IK
-		if (IsToeIKName(bone.name)) continue;
-#endif
 #if BONESOLVER_DISABLE_FOOT_IK
-		if (IsFootIKName(bone.name)) continue;
+	footIKs.clear();
 #endif
+#if BONESOLVER_DISABLE_TOE_IK
+	toeIKs.clear();
+#endif
+
+	for (size_t idx : otherIKs)
+	{
 		SolveIKBone(idx);
+	}
+
+	int nFoot = (int)footIKs.size();
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic) if(nFoot > 1)
+#endif
+	for (int i = 0; i < nFoot; ++i)
+	{
+		SolveIKBone(footIKs[i]);
+	}
+
+	int nToe = (int)toeIKs.size();
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic) if(nToe > 1)
+#endif
+	for (int i = 0; i < nToe; ++i)
+	{
+		SolveIKBone(toeIKs[i]);
 	}
 }
 
@@ -601,6 +633,10 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 	if (limitAngle <= 0.0f) limitAngle = DirectX::XM_PI;
 	const int loopCount = ikBone.ikLoopCount;
 
+	// [最適化] 更新チェーン探索用バッファ（スタック確保で高速化）
+	// 通常の人型モデルのIKチェーンは短いため16階層あれば十分
+	int chainBuffer[16];
+
 	for (int loop = 0; loop < loopCount; ++loop)
 	{
 		for (size_t linkIdx = 0; linkIdx < ikBone.ikLinks.size(); ++linkIdx)
@@ -676,8 +712,6 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 					float currentAngle = ExtractTwistAngleX(currentQ);
 
 					// 3. 角度のUnwrapping 
-					//    制限範囲の中心を基準に、現在の角度を ±180度以内に補正します。
-					//    例: 制限[-180, 0] のとき、+179度が来たら -181度 と解釈させる。
 					float minRad = MaybeDegreesToRadians(limMin.x);
 					float maxRad = MaybeDegreesToRadians(limMax.x);
 					if (minRad > maxRad) std::swap(minRad, maxRad);
@@ -692,7 +726,7 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 
 					// 5. 制限範囲でクランプ
 					targetAngle = std::clamp(targetAngle, minRad, maxRad);
-					// フレーム間のスパイク抑制：誤差が小さいのに解だけが切り替わるケースを抑える
+					// フレーム間のスパイク抑制
 					if (m_hasLastIkLimitedEuler[currIdx])
 					{
 						const float prev = m_lastIkLimitedEuler[currIdx].x;
@@ -707,15 +741,52 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 						targetAngle = std::clamp(prev + d, minRad, maxRad);
 					}
 
-
 					// 6. 新しい角度からクォータニオンを作成して適用
 					XMVECTOR newRot = XMQuaternionRotationAxis(XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f), targetAngle);
 					XMStoreFloat4(&linkState.localRotation, newRot);
 					m_lastIkLimitedEuler[currIdx].x = targetAngle;
 					m_hasLastIkLimitedEuler[currIdx] = 1;
 
+					// --- [最適化] 行列更新 ---
+					// 全子孫を再帰更新する UpdateGlobalMatrixRecursive(currIdx) を廃止し、
+					// 影響のあるチェーン（現在リンク～エフェクタ）のみを更新する。
+					{
+						// 1. 自分自身の行列更新
+						UpdateBoneTransform(currIdx);
 
-					UpdateGlobalMatrixRecursive(currIdx);
+						// 2. エフェクタ(targetIdx)までの経路を探索
+						int childCursor = m_bones[targetIdx].parentIndex;
+						int chainCount = 0;
+						bool connected = false;
+
+						// targetIdx から親を辿って currIdx に到達するか確認
+						while (childCursor >= 0 && chainCount < 16)
+						{
+							if (childCursor == (int)currIdx)
+							{
+								connected = true;
+								break;
+							}
+							chainBuffer[chainCount++] = childCursor;
+							childCursor = m_bones[childCursor].parentIndex;
+						}
+
+						if (connected)
+						{
+							// 経路上のボーンを親側(currIdx直下)から順に更新
+							for (int i = chainCount - 1; i >= 0; --i)
+							{
+								UpdateBoneTransform(chainBuffer[i]);
+							}
+							// 最後にエフェクタを更新
+							UpdateBoneTransform(targetIdx);
+						}
+						else
+						{
+							// 経路が繋がっていない場合(通常ありえない)はエフェクタのみ強制更新
+							UpdateBoneTransform(targetIdx);
+						}
+					}
 
 					// 収束判定
 					targetGlobal = XMLoadFloat4x4(&m_boneStates[targetIdx].globalMatrix);
@@ -730,7 +801,7 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 				}
 
 			}
-						// --- 通常の全方向IK (標準ロジック) ---
+			// --- 通常の全方向IK (標準ロジック) ---
 			XMVECTOR toDest = XMVectorSubtract(destPos, linkPos);
 			XMVECTOR toCurr = XMVectorSubtract(currPos, linkPos);
 
@@ -745,7 +816,6 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 			float dot = XMVectorGetX(XMVector3Dot(toDest, toCurr));
 			dot = std::clamp(dot, -1.0f, 1.0f);
 
-			// acos(dot) は dot≒±1 で不安定なので atan2(||cross||, dot) を使う
 			XMVECTOR axis = XMVector3Cross(toCurr, toDest);
 			const float axisLenSq = XMVectorGetX(XMVector3LengthSq(axis));
 			const float axisLen = std::sqrt(std::max(axisLenSq, 0.0f));
@@ -754,10 +824,9 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 			if (angle < 1e-4f) continue;
 			if (angle > limitAngle) angle = limitAngle;
 
-			// 反対向き付近（dot≒-1）で cross が極小だと軸が不定になるので、安定軸を選ぶ
 			if (axisLenSq < 1.0e-10f)
 			{
-				if (dot > 0.0f) continue; // ほぼ同方向（回転不要）
+				if (dot > 0.0f) continue; // ほぼ同方向
 
 				XMVECTOR base = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
 				if (std::fabs(XMVectorGetX(XMVector3Dot(toCurr, base))) > 0.99f)
@@ -793,8 +862,43 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 
 			XMStoreFloat4(&linkState.localRotation, currentRot);
 
-			// 行列更新
-			UpdateGlobalMatrixRecursive(currIdx);
+			// --- [最適化] 行列更新 ---
+			// 上記と同じ最適化ロジック
+			{
+				// 1. 自分自身の行列更新
+				UpdateBoneTransform(currIdx);
+
+				// 2. エフェクタ(targetIdx)までの経路を探索
+				int childCursor = m_bones[targetIdx].parentIndex;
+				int chainCount = 0;
+				bool connected = false;
+
+				while (childCursor >= 0 && chainCount < 16)
+				{
+					if (childCursor == (int)currIdx)
+					{
+						connected = true;
+						break;
+					}
+					chainBuffer[chainCount++] = childCursor;
+					childCursor = m_bones[childCursor].parentIndex;
+				}
+
+				if (connected)
+				{
+					// 経路上のボーンを親側(currIdx直下)から順に更新
+					for (int i = chainCount - 1; i >= 0; --i)
+					{
+						UpdateBoneTransform(chainBuffer[i]);
+					}
+					// 最後にエフェクタを更新
+					UpdateBoneTransform(targetIdx);
+				}
+				else
+				{
+					UpdateBoneTransform(targetIdx);
+				}
+			}
 
 			// 収束判定
 			targetGlobal = XMLoadFloat4x4(&m_boneStates[targetIdx].globalMatrix);
@@ -808,6 +912,42 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 	}
 }
 
+void BoneSolver::UpdateChainGlobalMatrix(size_t boneIndex)
+{
+	// 再帰的に子を更新せず、このボーンのグローバル行列だけを再計算する
+	// (親のグローバル行列は計算済みであるという前提で動作する)
+
+	// 1. ローカル行列更新
+	UpdateBoneTransform(boneIndex);
+
+	// 2. グローバル行列更新 (CalculateGlobalMatrixの内容を展開して最適化)
+	const auto& bone = m_bones[boneIndex];
+	auto& state = m_boneStates[boneIndex];
+	XMMATRIX localMat = XMLoadFloat4x4(&state.localMatrix);
+	XMMATRIX globalMat;
+
+	if (bone.parentIndex >= 0 && bone.parentIndex < static_cast<int32_t>(m_bones.size()))
+	{
+		const auto& parentBone = m_bones[bone.parentIndex];
+		const auto& parentState = m_boneStates[bone.parentIndex];
+
+		// 親の行列は「最新である」と信頼する
+		XMVECTOR parentPos = XMLoadFloat3(&parentBone.position);
+		XMVECTOR bonePos = XMLoadFloat3(&bone.position);
+		XMVECTOR relativePos = XMVectorSubtract(bonePos, parentPos);
+		XMMATRIX parentGlobal = XMLoadFloat4x4(&parentState.globalMatrix);
+
+		globalMat = localMat * XMMatrixTranslationFromVector(relativePos) * parentGlobal;
+	}
+	else
+	{
+		XMVECTOR bonePos = XMLoadFloat3(&bone.position);
+		globalMat = localMat * XMMatrixTranslationFromVector(bonePos);
+	}
+
+	XMStoreFloat4x4(&state.globalMatrix, globalMat);
+}
+
 void BoneSolver::UpdateMatrices()
 {
 	UpdateMatrices(true);
@@ -815,19 +955,18 @@ void BoneSolver::UpdateMatrices()
 
 void BoneSolver::UpdateMatrices(bool solveIK)
 {
-	for (size_t idx : m_sortedBoneOrder)
-		UpdateBoneTransform(idx);
+	for (size_t idx : m_sortedBoneOrder) UpdateBoneTransform(idx);
 
 	if (solveIK)
 	{
 		SolveIK();
 
-		for (size_t idx : m_sortedBoneOrder)
-			UpdateBoneTransform(idx);
+		for (size_t idx : m_sortedBoneOrder) UpdateBoneTransform(idx);
 	}
 
-	for (size_t i = 0; i < m_bones.size(); ++i)
-		CalculateSkinningMatrix(i);
+	const int n = static_cast<int>(m_bones.size());
+#pragma omp parallel for schedule(static) if(n >= 256)
+	for (int i = 0; i < n; ++i) CalculateSkinningMatrix(i);
 }
 
 void BoneSolver::UpdateMatricesNoIK()
