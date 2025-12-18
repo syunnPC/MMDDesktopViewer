@@ -94,8 +94,60 @@ static void SetProcessEcoQoS(bool enable)
 	SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &s, sizeof(s));
 }
 
+static bool HasEnvVar(const wchar_t* name)
+{
+	wchar_t buf[2];
+	DWORD n = GetEnvironmentVariableW(name, buf, 2);
+	return n != 0 && n != ERROR_ENVVAR_NOT_FOUND;
+}
+
+//OpenMPのビジーループをパッシブに
+static void RelaunchWithOpenMpPassiveIfNeeded()
+{
+	constexpr const wchar_t* kMarker = L"MMD_OMP_BOOTSTRAP_DONE";
+	if (HasEnvVar(kMarker))
+	{
+		return;
+	}
+
+	wchar_t policy[64]{};
+	DWORD n = GetEnvironmentVariableW(L"OMP_WAIT_POLICY", policy, (DWORD)std::size(policy));
+	if (n > 0 && _wcsicmp(policy, L"PASSIVE") == 0)
+	{
+		SetEnvironmentVariableW(kMarker, L"1");
+		return;
+	}
+
+	SetEnvironmentVariableW(L"OMP_WAIT_POLICY", L"PASSIVE");
+	SetEnvironmentVariableW(kMarker, L"1");
+
+	std::wstring cmd = GetCommandLineW();
+
+	STARTUPINFOW si{};
+	si.cb = sizeof(si);
+	PROCESS_INFORMATION pi{};
+
+	if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi))
+	{
+		CloseHandle(pi.hThread);
+		CloseHandle(pi.hProcess);
+		ExitProcess(0); 
+	}
+	else
+	{
+		OutputDebugStringW(L"CreateProcessW() failed.");
+		if (MessageBoxW(nullptr, L"OpenMPの環境変数の設定に失敗しました。パフォーマンスが低下する可能性があります。続行しますか?", L"MMDDesk", MB_ICONINFORMATION | MB_YESNO) == IDNO)
+		{
+			ExitProcess(0);
+		}
+		SetEnvironmentVariableW(kMarker, nullptr);
+	}
+}
+
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int)
 {
+	RelaunchWithOpenMpPassiveIfNeeded();
+
 #ifdef __AVX2__
 	if (!IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE))
 	{
