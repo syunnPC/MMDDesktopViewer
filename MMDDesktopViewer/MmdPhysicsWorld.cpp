@@ -706,6 +706,9 @@ void MmdPhysicsWorld::BuildFromModel(const PmxModel& model, const BoneSolver& bo
 			const float minLen = std::max(0.0f, m_settings.generatedBodyColliderMinBoneLength);
 			for (int p = 0; p < static_cast<int>(bonesDef.size()); ++p)
 			{
+				// [FIX] 既に剛体を持っているボーンには、追加のコライダーを生成しない
+				if (boneHasBody[static_cast<size_t>(p)]) continue;
+
 				const XMVECTOR pp = Load3(bonesDef[static_cast<size_t>(p)].position);
 
 				// Outlier check removed (always passes with max outlierR)
