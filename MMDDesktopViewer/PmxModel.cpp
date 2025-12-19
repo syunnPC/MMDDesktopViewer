@@ -262,6 +262,7 @@ bool PmxModel::Load(const std::filesystem::path& pmxPath, ProgressCallback onPro
 	m_textures.clear();
 	m_materials.clear();
 	m_bones.clear();
+	m_morphs.clear();
 	m_rigidBodies.clear();
 	m_joints.clear();
 
@@ -474,79 +475,144 @@ void PmxModel::LoadMorphs(BinaryReader& br)
 	const int32_t morphCount = br.Read<std::int32_t>();
 	if (morphCount < 0) throw std::runtime_error("Invalid morphCount.");
 
-	// 今は物理まで到達するために「読み飛ばし」目的。必要になったら保持に拡張する。
+	m_morphs.clear();
+	m_morphs.reserve(static_cast<size_t>(morphCount));
+
 	for (int32_t i = 0; i < morphCount; ++i)
 	{
-		(void)ReadPmxText(br); // name
-		(void)ReadPmxText(br); // nameEn
-		(void)br.Read<std::uint8_t>(); // panel
-		const std::uint8_t morphType = br.Read<std::uint8_t>();
+		Morph morph{};
+		morph.name = ReadPmxText(br);
+		morph.nameEn = ReadPmxText(br);
+		morph.panel = br.Read<std::uint8_t>();
+		morph.type = static_cast<Morph::Type>(br.Read<std::uint8_t>());
+
 		const int32_t offsetCount = br.Read<std::int32_t>();
 		if (offsetCount < 0) throw std::runtime_error("Invalid morph offsetCount.");
 
+		// オフセットデータの読み込み
+		switch (morph.type)
+		{
+			case Morph::Type::Group:
+				morph.groupOffsets.reserve(offsetCount);
+				break;
+			case Morph::Type::Vertex:
+				morph.vertexOffsets.reserve(offsetCount);
+				break;
+			case Morph::Type::Bone:
+				morph.boneOffsets.reserve(offsetCount);
+				break;
+			case Morph::Type::UV:
+			case Morph::Type::AdditionalUV1:
+			case Morph::Type::AdditionalUV2:
+			case Morph::Type::AdditionalUV3:
+			case Morph::Type::AdditionalUV4:
+				morph.uvOffsets.reserve(offsetCount);
+				break;
+			case Morph::Type::Material:
+				morph.materialOffsets.reserve(offsetCount);
+				break;
+			case Morph::Type::Flip:
+				morph.flipOffsets.reserve(offsetCount);
+				break;
+			case Morph::Type::Impulse:
+				morph.impulseOffsets.reserve(offsetCount);
+				break;
+		}
+
 		for (int32_t k = 0; k < offsetCount; ++k)
 		{
-			switch (morphType)
+			switch (morph.type)
 			{
-				case 0: // Group
-					(void)ReadIndexSigned(br, m_header.morphIndexSize);
-					(void)br.Read<float>();
+				case Morph::Type::Group:
+				{
+					Morph::GroupOffset o{};
+					o.morphIndex = ReadIndexSigned(br, m_header.morphIndexSize);
+					o.weight = br.Read<float>();
+					morph.groupOffsets.push_back(o);
 					break;
-
-				case 1: // Vertex
-					(void)ReadIndexUnsigned(br, m_header.vertexIndexSize);
-					(void)br.Read<float>(); (void)br.Read<float>(); (void)br.Read<float>();
+				}
+				case Morph::Type::Vertex:
+				{
+					Morph::VertexOffset o{};
+					o.vertexIndex = ReadIndexUnsigned(br, m_header.vertexIndexSize);
+					o.positionOffset.x = br.Read<float>();
+					o.positionOffset.y = br.Read<float>();
+					o.positionOffset.z = br.Read<float>();
+					morph.vertexOffsets.push_back(o);
 					break;
-
-				case 2: // Bone
-					(void)ReadIndexSigned(br, m_header.boneIndexSize);
-					(void)br.Read<float>(); (void)br.Read<float>(); (void)br.Read<float>(); // trans
-					(void)br.Read<float>(); (void)br.Read<float>(); (void)br.Read<float>(); (void)br.Read<float>(); // rot(quat)
+				}
+				case Morph::Type::Bone:
+				{
+					Morph::BoneOffset o{};
+					o.boneIndex = ReadIndexSigned(br, m_header.boneIndexSize);
+					o.translation.x = br.Read<float>();
+					o.translation.y = br.Read<float>();
+					o.translation.z = br.Read<float>();
+					o.rotation.x = br.Read<float>();
+					o.rotation.y = br.Read<float>();
+					o.rotation.z = br.Read<float>();
+					o.rotation.w = br.Read<float>();
+					morph.boneOffsets.push_back(o);
 					break;
-
-				case 3: // UV
-				case 4: // Additional UV1
-				case 5: // Additional UV2
-				case 6: // Additional UV3
-				case 7: // Additional UV4
-					(void)ReadIndexUnsigned(br, m_header.vertexIndexSize);
-					(void)br.Read<float>(); (void)br.Read<float>(); (void)br.Read<float>(); (void)br.Read<float>();
+				}
+				case Morph::Type::UV:
+				case Morph::Type::AdditionalUV1:
+				case Morph::Type::AdditionalUV2:
+				case Morph::Type::AdditionalUV3:
+				case Morph::Type::AdditionalUV4:
+				{
+					Morph::UVOffset o{};
+					o.vertexIndex = ReadIndexUnsigned(br, m_header.vertexIndexSize);
+					o.offset.x = br.Read<float>();
+					o.offset.y = br.Read<float>();
+					o.offset.z = br.Read<float>();
+					o.offset.w = br.Read<float>();
+					morph.uvOffsets.push_back(o);
 					break;
+				}
+				case Morph::Type::Material:
+				{
+					Morph::MaterialOffset o{};
+					o.materialIndex = ReadIndexSigned(br, m_header.materialIndexSize);
+					o.operation = br.Read<std::uint8_t>();
 
-				case 8: // Material
-					(void)ReadIndexSigned(br, m_header.materialIndexSize);
-					(void)br.Read<std::uint8_t>(); // op
+					o.diffuse.x = br.Read<float>(); o.diffuse.y = br.Read<float>(); o.diffuse.z = br.Read<float>(); o.diffuse.w = br.Read<float>();
+					o.specular.x = br.Read<float>(); o.specular.y = br.Read<float>(); o.specular.z = br.Read<float>();
+					o.specularPower = br.Read<float>();
+					o.ambient.x = br.Read<float>(); o.ambient.y = br.Read<float>(); o.ambient.z = br.Read<float>();
+					o.edgeColor.x = br.Read<float>(); o.edgeColor.y = br.Read<float>(); o.edgeColor.z = br.Read<float>(); o.edgeColor.w = br.Read<float>();
+					o.edgeSize = br.Read<float>();
+					o.textureFactor.x = br.Read<float>(); o.textureFactor.y = br.Read<float>(); o.textureFactor.z = br.Read<float>(); o.textureFactor.w = br.Read<float>();
+					o.sphereTextureFactor.x = br.Read<float>(); o.sphereTextureFactor.y = br.Read<float>(); o.sphereTextureFactor.z = br.Read<float>(); o.sphereTextureFactor.w = br.Read<float>();
+					o.toonTextureFactor.x = br.Read<float>(); o.toonTextureFactor.y = br.Read<float>(); o.toonTextureFactor.z = br.Read<float>(); o.toonTextureFactor.w = br.Read<float>();
 
-					// diffuse(4) specular(3) specPow(1) ambient(3) edgeColor(4) edgeSize(1)
-					for (int t = 0; t < 4; ++t) (void)br.Read<float>();
-					for (int t = 0; t < 3; ++t) (void)br.Read<float>();
-					(void)br.Read<float>();
-					for (int t = 0; t < 3; ++t) (void)br.Read<float>();
-					for (int t = 0; t < 4; ++t) (void)br.Read<float>();
-					(void)br.Read<float>();
-
-					// tex/sphere/toon tint (各4)
-					for (int t = 0; t < 4; ++t) (void)br.Read<float>();
-					for (int t = 0; t < 4; ++t) (void)br.Read<float>();
-					for (int t = 0; t < 4; ++t) (void)br.Read<float>();
+					morph.materialOffsets.push_back(o);
 					break;
-
-				case 9: // Flip
-					(void)ReadIndexSigned(br, m_header.morphIndexSize);
-					(void)br.Read<float>();
+				}
+				case Morph::Type::Flip:
+				{
+					Morph::FlipOffset o{};
+					o.morphIndex = ReadIndexSigned(br, m_header.morphIndexSize);
+					o.weight = br.Read<float>();
+					morph.flipOffsets.push_back(o);
 					break;
-
-				case 10: // Impulse
-					(void)ReadIndexSigned(br, m_header.rigidIndexSize);
-					(void)br.Read<std::uint8_t>(); // local flag
-					for (int t = 0; t < 3; ++t) (void)br.Read<float>(); // velocity
-					for (int t = 0; t < 3; ++t) (void)br.Read<float>(); // torque
+				}
+				case Morph::Type::Impulse:
+				{
+					Morph::ImpulseOffset o{};
+					o.rigidBodyIndex = ReadIndexSigned(br, m_header.rigidIndexSize);
+					o.localFlag = br.Read<std::uint8_t>();
+					o.velocity.x = br.Read<float>(); o.velocity.y = br.Read<float>(); o.velocity.z = br.Read<float>();
+					o.torque.x = br.Read<float>(); o.torque.y = br.Read<float>(); o.torque.z = br.Read<float>();
+					morph.impulseOffsets.push_back(o);
 					break;
-
+				}
 				default:
 					throw std::runtime_error("Unknown morph type.");
 			}
 		}
+
+		m_morphs.push_back(std::move(morph));
 	}
 }
 

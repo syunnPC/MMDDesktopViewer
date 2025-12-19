@@ -142,6 +142,93 @@ public:
 		}
 	};
 
+	// モーフ構造体
+	struct Morph
+	{
+		enum class Type : std::uint8_t
+		{
+			Group = 0,
+			Vertex = 1,
+			Bone = 2,
+			UV = 3,
+			AdditionalUV1 = 4,
+			AdditionalUV2 = 5,
+			AdditionalUV3 = 6,
+			AdditionalUV4 = 7,
+			Material = 8,
+			Flip = 9,
+			Impulse = 10
+		};
+
+		struct GroupOffset
+		{
+			std::int32_t morphIndex;
+			float weight;
+		};
+
+		struct VertexOffset
+		{
+			std::uint32_t vertexIndex;
+			DirectX::XMFLOAT3 positionOffset;
+		};
+
+		struct BoneOffset
+		{
+			std::int32_t boneIndex;
+			DirectX::XMFLOAT3 translation;
+			DirectX::XMFLOAT4 rotation;
+		};
+
+		struct UVOffset
+		{
+			std::uint32_t vertexIndex;
+			DirectX::XMFLOAT4 offset;
+		};
+
+		struct MaterialOffset
+		{
+			std::int32_t materialIndex;
+			std::uint8_t operation; // 0:乗算, 1:加算
+			DirectX::XMFLOAT4 diffuse;
+			DirectX::XMFLOAT3 specular;
+			float specularPower;
+			DirectX::XMFLOAT3 ambient;
+			DirectX::XMFLOAT4 edgeColor;
+			float edgeSize;
+			DirectX::XMFLOAT4 textureFactor;
+			DirectX::XMFLOAT4 sphereTextureFactor;
+			DirectX::XMFLOAT4 toonTextureFactor;
+		};
+
+		struct FlipOffset
+		{
+			std::int32_t morphIndex;
+			float weight;
+		};
+
+		struct ImpulseOffset
+		{
+			std::int32_t rigidBodyIndex;
+			std::uint8_t localFlag;
+			DirectX::XMFLOAT3 velocity;
+			DirectX::XMFLOAT3 torque;
+		};
+
+		std::wstring name;
+		std::wstring nameEn;
+		std::uint8_t panel;
+		Type type;
+
+		// データ保持
+		std::vector<GroupOffset> groupOffsets;
+		std::vector<VertexOffset> vertexOffsets;
+		std::vector<BoneOffset> boneOffsets;
+		std::vector<UVOffset> uvOffsets; // UV(0~4)すべてここで扱う
+		std::vector<MaterialOffset> materialOffsets;
+		std::vector<FlipOffset> flipOffsets;
+		std::vector<ImpulseOffset> impulseOffsets;
+	};
+
 	// 剛体(PMX)
 	struct RigidBody
 	{
@@ -232,6 +319,10 @@ public:
 	{
 		return m_bones;
 	}
+	const std::vector<Morph>& Morphs() const
+	{
+		return m_morphs;
+	}
 
 	const std::vector<RigidBody>& RigidBodies() const
 	{
@@ -278,6 +369,7 @@ private:
 	std::vector<std::filesystem::path> m_textures;
 	std::vector<Material> m_materials;
 	std::vector<Bone> m_bones;
+	std::vector<Morph> m_morphs;
 
 	std::vector<RigidBody> m_rigidBodies;
 	std::vector<Joint> m_joints;

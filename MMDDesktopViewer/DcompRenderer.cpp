@@ -1012,6 +1012,8 @@ void DcompRenderer::UpdateWindowBounds(
 	m_hasContentRect = true;
 }
 
+// DcompRenderer.cpp の Render をこれに置き換え
+
 void DcompRenderer::Render(const MmdAnimator& animator)
 {
 	const auto* model = animator.Model();
@@ -1027,7 +1029,6 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	float minx, miny, minz, maxx, maxy, maxz;
 	animator.GetBounds(minx, miny, minz, maxx, maxy, maxz);
 
-
 	// 足元スナップ用：余白(margin)を入れると底がズレるので、GetBounds() の生値を保持。
 	const float minxSnap = minx;
 	const float minySnap = miny;
@@ -1035,12 +1036,11 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	const float maxxSnap = maxx;
 	const float maxySnap = maxy;
 	const float maxzSnap = maxz;
-	// まずリサイズを反映（投影/スナップ計算に最新の m_width/m_height を使う）
+
+	// まずリサイズを反映
 	ResizeIfNeeded();
 	if (!m_intermediateTex || !m_intermediateRtvHeap || !m_intermediateSrvHeap)
 	{
-		// 初期化順や例外経路で中間RTが未作成/解放されている可能性がある。
-		// ここで救済して、Render() の早期returnで真っ透明になるのを防ぐ。
 		CreateIntermediateResources();
 	}
 
@@ -1087,9 +1087,6 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	XMMATRIX invV = XMMatrixInverse(nullptr, V);
 	XMVECTOR upWorld = XMVector3Normalize(invV.r[1]);
 
-	// ウインドウサイズとモデルサイズを切り離す：
-	// 画面上のモデルの大きさ（焦点距離）を固定し、ウインドウサイズ変更でモデルが拡大/縮小しないようにする。
-	// UpdateWindowBounds と同じスケール（K）を使う。
 	const float refFov = XMConvertToRadians(30.0f);
 	const float K = 600.0f / std::tan(refFov * 0.5f);
 
@@ -1099,8 +1096,6 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	XMMATRIX P = XMMatrixPerspectiveFovLH(fovY, aspect, 0.1f, 100.0f);
 
 	// ---- 足元スナップ（常に底辺に接地させる） ----
-	// AABB の底（minY）を、画面の下端近くに合わせる。
-	// （スムージングや小さすぎるクランプを入れないことで、リサイズ時の「上から落ちてくる」挙動を抑止）
 	float snapT = 0.0f;
 	{
 		UINT clientW = 0, clientH = 0;
@@ -1109,7 +1104,7 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 		if (clientW > 0 && clientH > 0)
 		{
 			const float centerY = (float)clientH * 0.5f;
-			const float desiredBottomY = (float)clientH - 2.0f; // 下端からの余白(px)。小さくして足元を底辺に寄せる
+			const float desiredBottomY = (float)clientH - 2.0f;
 
 			XMFLOAT3 corners[8] = {
 				{ minxSnap, minySnap, minzSnap }, { maxxSnap, minySnap, minzSnap },
@@ -1138,14 +1133,13 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 					return centerY - minV;
 				};
 
-			// Newton 法で 1〜2 回補正（リサイズ直後でも即座に収束）
 			for (int it = 0; it < 2; ++it)
 			{
 				const float y0 = CalcBottomYPixels(snapT);
 				const float err = desiredBottomY - y0;
 				if (std::fabs(err) < 0.25f) break;
 
-				const float eps = 0.01f; // 正規化後モデル空間での微小移動
+				const float eps = 0.01f;
 				const float yp = CalcBottomYPixels(snapT + eps);
 				const float ym = CalcBottomYPixels(snapT - eps);
 				const float deriv = (yp - ym) / (2.0f * eps);
@@ -1157,7 +1151,7 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 		}
 	}
 
-	// レンダリング用モデル行列（スナップ → ユーザーオフセット）
+	// レンダリング用モデル行列
 	XMMATRIX M =
 		M_track *
 		XMMatrixTranslationFromVector(XMVectorScale(upWorld, snapT)) *
@@ -1174,6 +1168,17 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 		CreateIntermediateResources();
 	}
 	if (!m_dsvHeap || !m_depth || !m_intermediateTex || !m_intermediateRtvHeap || !m_intermediateSrvHeap) return;
+
+	// -------------------------------------------------------------
+	// モーフの更新処理 (頂点変形 & マテリアル更新)
+	// -------------------------------------------------------------
+	UpdatePmxMorphs(animator);
+	// -------------------------------------------------------------
+
+	// マテリアル設定（影の濃さなど）を再適用
+	// ※ UpdatePmxMorphs でマテリアル色が変わった後に呼ぶことで、設定値(ShadowMulなど)を維持する
+	UpdateMaterialSettings();
+
 
 	m_alloc[frameIndex]->Reset();
 	m_cmdList->Reset(m_alloc[frameIndex].Get(), nullptr);
@@ -1301,6 +1306,9 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 		trans.reserve(m_pmx.materials.size());
 		for (size_t i = 0; i < m_pmx.materials.size(); ++i)
 		{
+			// モーフで透過度が変わる可能性があるため、現在のdiffuse[3]をチェックするのが正しいが、
+			// m_pmx.materials[i].mat は初期値なので、厳密には CB を見に行く必要がある。
+			// ここでは簡易的に初期値で判定する（多くのモデルで半透明/不透明の属性は静的であるため）。
 			if (m_pmx.materials[i].mat.diffuse[3] < 0.999f) trans.push_back(i);
 			else opaque.push_back(i);
 		}
@@ -1316,17 +1324,15 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 			}
 			};
 
-		// 不透明描画
 		m_cmdList->SetPipelineState(m_pmxPsoOpaque.Get());
 		DrawMats(opaque);
 
-		// 半透明描画
 		m_cmdList->SetPipelineState(m_pmxPsoTrans.Get());
 		DrawMats(trans);
 
-		// 輪郭線描画 (Edge Pass)
+		// 輪郭線 (Edge Pass)
 		m_cmdList->SetPipelineState(m_edgePso.Get());
-		m_cmdList->SetGraphicsRootSignature(m_pmxRootSig.Get()); // Edgeも同じルートシグネチャを使用
+		m_cmdList->SetGraphicsRootSignature(m_pmxRootSig.Get());
 		m_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		m_cmdList->IASetVertexBuffers(0, 1, &m_pmx.vbv);
 		m_cmdList->IASetIndexBuffer(&m_pmx.ibv);
@@ -1336,8 +1342,16 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 
 		for (size_t i = 0; i < m_pmx.materials.size(); ++i)
 		{
+			// 現在のエッジサイズ（モーフ適用後）を確認すべきだが、ここも簡易的に初期値または
+			// MaterialCB の値を参照する形にするのが望ましい。
+			// MaterialCB の edgeSize を読むにはGPU書き込み後でCPU参照が難しいため、
+			// 厳密にはCBをCPU側でミラーリングする必要がある。
+			// 今回の UpdatePmxMorphs では mappedポインタ に書いているので読み取り可能。
+
 			const auto& gm = m_pmx.materials[i];
-			if (gm.mat.edgeSize <= 0.0f) continue;
+			const MaterialCB* cb = reinterpret_cast<const MaterialCB*>(m_materialCbMapped + i * m_materialCbStride);
+
+			if (cb->edgeSize <= 0.0f || cb->edgeColor.w <= 0.001f) continue;
 
 			m_cmdList->SetGraphicsRootConstantBufferView(1, gm.materialCbGpu);
 			m_cmdList->SetGraphicsRootDescriptorTable(2, GetSrvGpuHandle(gm.srvBlockIndex));
@@ -1348,26 +1362,20 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 
 	if (useMsaa)
 	{
-		// MSAA Target(RT) -> Resolve Source
 		auto b1 = CD3DX12_RESOURCE_BARRIER::Transition(
 			m_msaaColor.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
-
-		// Intermediate(RT) -> Resolve Dest
 		auto b2 = CD3DX12_RESOURCE_BARRIER::Transition(
 			m_intermediateTex.Get(), s_interState, D3D12_RESOURCE_STATE_RESOLVE_DEST);
 
 		D3D12_RESOURCE_BARRIER barriers[] = { b1, b2 };
 		m_cmdList->ResourceBarrier(2, barriers);
 
-		// Resolve実行
 		m_cmdList->ResolveSubresource(
 			m_intermediateTex.Get(), 0, m_msaaColor.Get(), 0, DXGI_FORMAT_R10G10B10A2_UNORM);
 
-		// 状態更新
 		m_msaaColorState = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
 		s_interState = D3D12_RESOURCE_STATE_RESOLVE_DEST;
 
-		// MSAAバッファを次フレーム用にRTに戻しておく
 		auto b3 = CD3DX12_RESOURCE_BARRIER::Transition(
 			m_msaaColor.Get(), D3D12_RESOURCE_STATE_RESOLVE_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
 		m_cmdList->ResourceBarrier(1, &b3);
@@ -1412,7 +1420,6 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 
 	if (m_readbackBuffers[frameIndex])
 	{
-		// Present -> CopySource
 		auto b1 = CD3DX12_RESOURCE_BARRIER::Transition(
 			m_renderTargets[frameIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
 		m_cmdList->ResourceBarrier(1, &b1);
@@ -1422,7 +1429,6 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 
 		m_cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
 
-		// CopySource -> Present
 		auto b2 = CD3DX12_RESOURCE_BARRIER::Transition(
 			m_renderTargets[frameIndex].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
 		m_cmdList->ResourceBarrier(1, &b2);
@@ -1440,6 +1446,236 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 
 	WaitForFrame(frameIndex);
 	PresentLayered(frameIndex);
+}
+
+void DcompRenderer::AddMorphWeight(const PmxModel* model, int morphIndex, float weight, std::vector<float>& totalWeights)
+{
+	if (morphIndex < 0 || morphIndex >= static_cast<int>(totalWeights.size())) return;
+
+	const auto& m = model->Morphs()[morphIndex];
+
+	if (m.type == PmxModel::Morph::Type::Group)
+	{
+		// グループモーフ：子モーフに対してウェイトを乗算して再帰的に適用
+		for (const auto& offset : m.groupOffsets)
+		{
+			AddMorphWeight(model, offset.morphIndex, weight * offset.weight, totalWeights);
+		}
+	}
+	else
+	{
+		// 通常モーフ：ウェイトを加算（同一モーフが複数回参照される場合のため）
+		totalWeights[morphIndex] += weight;
+	}
+}
+
+void DcompRenderer::UpdatePmxMorphs(const MmdAnimator& animator)
+{
+	if (!m_pmx.ready) return;
+	const auto* model = animator.Model();
+	if (!model) return;
+
+	// モーフ一覧を取得
+	const auto& morphs = model->Morphs();
+	if (morphs.empty()) return;
+
+	// 1. モーフウェイトの解決 (グループモーフの再帰展開)
+	// -------------------------------------------------------------------------
+	// ウェイト配列をリセット
+	if (m_morphWeights.size() != morphs.size())
+	{
+		m_morphWeights.resize(morphs.size());
+	}
+	std::fill(m_morphWeights.begin(), m_morphWeights.end(), 0.0f);
+
+	const auto& currentPose = animator.CurrentPose();
+
+	// 名前ベースでアクティブなモーフを検索し、インデックスベースのウェイト配列に反映
+	for (size_t i = 0; i < morphs.size(); ++i)
+	{
+		auto it = currentPose.morphWeights.find(morphs[i].name);
+		if (it != currentPose.morphWeights.end())
+		{
+			float w = it->second;
+			if (std::abs(w) > 0.0001f)
+			{
+				AddMorphWeight(model, static_cast<int>(i), w, m_morphWeights);
+			}
+		}
+	}
+
+	// 2. 頂点・UVモーフの適用 (CPU計算 -> GPU転送)
+	// -------------------------------------------------------------------------
+	// 累積誤差を防ぐため、毎回「初期状態(Base)」から計算を行う
+	if (m_baseVertices.empty()) return;
+
+	// 作業用バッファを初期化
+	if (m_workingVertices.size() != m_baseVertices.size())
+	{
+		m_workingVertices = m_baseVertices;
+	}
+	else
+	{
+		std::memcpy(m_workingVertices.data(), m_baseVertices.data(), m_baseVertices.size() * sizeof(PmxVsVertex));
+	}
+
+	bool vertexDirty = false;
+
+	for (size_t i = 0; i < morphs.size(); ++i)
+	{
+		float w = m_morphWeights[i];
+		if (std::abs(w) < 0.0001f) continue;
+
+		const auto& m = morphs[i];
+
+		if (m.type == PmxModel::Morph::Type::Vertex)
+		{
+			vertexDirty = true;
+			for (const auto& vo : m.vertexOffsets)
+			{
+				if (vo.vertexIndex < m_workingVertices.size())
+				{
+					auto& v = m_workingVertices[vo.vertexIndex];
+					v.px += vo.positionOffset.x * w;
+					v.py += vo.positionOffset.y * w;
+					v.pz += vo.positionOffset.z * w;
+				}
+			}
+		}
+		else if (m.type == PmxModel::Morph::Type::UV) // UV0
+		{
+			vertexDirty = true;
+			for (const auto& uvo : m.uvOffsets)
+			{
+				if (uvo.vertexIndex < m_workingVertices.size())
+				{
+					auto& v = m_workingVertices[uvo.vertexIndex];
+					v.u += uvo.offset.x * w;
+					v.v += uvo.offset.y * w;
+					// PMX仕様ではUVオフセットは float4 だが、頂点データは float2 (u,v) のため z,w は無視
+				}
+			}
+		}
+		// 追加UV(1~4)が必要な場合はここに実装を追加する
+	}
+
+	// 変更があった場合のみ GPU リソースを更新
+	if (vertexDirty && m_pmx.vb)
+	{
+		void* mapped = nullptr;
+		CD3DX12_RANGE range(0, 0); // 書き込み専用
+		if (SUCCEEDED(m_pmx.vb->Map(0, &range, &mapped)))
+		{
+			std::memcpy(mapped, m_workingVertices.data(), m_workingVertices.size() * sizeof(PmxVsVertex));
+			m_pmx.vb->Unmap(0, nullptr);
+		}
+	}
+
+	// 3. マテリアルモーフの適用 (Mapped Buffer 直接書き換え)
+	// -------------------------------------------------------------------------
+	// マテリアル定数バッファを先頭から順に更新する
+	// ※マテリアル数が一致していることを前提とする
+
+	for (size_t mi = 0; mi < m_pmx.materials.size(); ++mi)
+	{
+		const auto& gm = m_pmx.materials[mi]; // GPU用マテリアル定義(初期値保持)
+
+		// マップ済みポインタを取得
+		MaterialCB* cb = reinterpret_cast<MaterialCB*>(m_materialCbMapped + mi * m_materialCbStride);
+
+		// まず初期値にリセット
+		cb->diffuse = { gm.mat.diffuse[0], gm.mat.diffuse[1], gm.mat.diffuse[2], gm.mat.diffuse[3] };
+		cb->specular = { gm.mat.specular[0], gm.mat.specular[1], gm.mat.specular[2] };
+		cb->specPower = gm.mat.specularPower;
+		cb->ambient = { gm.mat.ambient[0], gm.mat.ambient[1], gm.mat.ambient[2] };
+		cb->edgeColor = { gm.mat.edgeColor[0], gm.mat.edgeColor[1], gm.mat.edgeColor[2], gm.mat.edgeColor[3] };
+		cb->edgeSize = gm.mat.edgeSize;
+
+		// 以下のパラメータはモーフ対象外だが、UpdateMaterialSettings で上書きされる可能性があるため
+		// ここでは初期値をセットし、マテリアル設定更新関数との競合に注意する必要がある。
+		// 今回は「モーフが優先」される構成とする。
+
+		// マテリアルモーフ適用
+		for (size_t i = 0; i < morphs.size(); ++i)
+		{
+			float w = m_morphWeights[i];
+			if (std::abs(w) < 0.0001f) continue;
+
+			const auto& m = morphs[i];
+			if (m.type == PmxModel::Morph::Type::Material)
+			{
+				for (const auto& mo : m.materialOffsets)
+				{
+					// 対象インデックスが -1 なら全マテリアル対象、そうでなければ一致判定
+					if (mo.materialIndex == -1 || mo.materialIndex == static_cast<int>(mi))
+					{
+						// 演算タイプ: 0=乗算, 1=加算
+						if (mo.operation == 0) // 乗算
+						{
+							// MMD仕様の乗算: Base * (1 + (Offset - 1) * w)
+							// Offsetが1なら変化なし、0なら w=1 で0になる
+							auto applyMul4 = [&](DirectX::XMFLOAT4& target, const DirectX::XMFLOAT4& offset) {
+								target.x *= (1.0f + (offset.x - 1.0f) * w);
+								target.y *= (1.0f + (offset.y - 1.0f) * w);
+								target.z *= (1.0f + (offset.z - 1.0f) * w);
+								target.w *= (1.0f + (offset.w - 1.0f) * w);
+								};
+							auto applyMul3 = [&](DirectX::XMFLOAT3& target, const DirectX::XMFLOAT3& offset) {
+								target.x *= (1.0f + (offset.x - 1.0f) * w);
+								target.y *= (1.0f + (offset.y - 1.0f) * w);
+								target.z *= (1.0f + (offset.z - 1.0f) * w);
+								};
+							auto applyMul1 = [&](float& target, float offset) {
+								target *= (1.0f + (offset - 1.0f) * w);
+								};
+
+							applyMul4(cb->diffuse, mo.diffuse);
+							applyMul3(cb->specular, mo.specular);
+							applyMul1(cb->specPower, mo.specularPower);
+							applyMul3(cb->ambient, mo.ambient);
+							applyMul4(cb->edgeColor, mo.edgeColor);
+							applyMul1(cb->edgeSize, mo.edgeSize);
+
+							// テクスチャ係数等はMaterialCBに含まれていないため省略
+						}
+						else if (mo.operation == 1) // 加算
+						{
+							// 単純加算: Base + Offset * w
+							auto applyAdd4 = [&](DirectX::XMFLOAT4& target, const DirectX::XMFLOAT4& offset) {
+								target.x += offset.x * w;
+								target.y += offset.y * w;
+								target.z += offset.z * w;
+								target.w += offset.w * w;
+								};
+							auto applyAdd3 = [&](DirectX::XMFLOAT3& target, const DirectX::XMFLOAT3& offset) {
+								target.x += offset.x * w;
+								target.y += offset.y * w;
+								target.z += offset.z * w;
+								};
+							auto applyAdd1 = [&](float& target, float offset) {
+								target += offset * w;
+								};
+
+							applyAdd4(cb->diffuse, mo.diffuse);
+							applyAdd3(cb->specular, mo.specular);
+							applyAdd1(cb->specPower, mo.specularPower);
+							applyAdd3(cb->ambient, mo.ambient);
+							applyAdd4(cb->edgeColor, mo.edgeColor);
+							applyAdd1(cb->edgeSize, mo.edgeSize);
+						}
+					}
+				}
+			}
+		}
+
+		// 値のクランプ (色などが負になったり1を超えすぎないように)
+		auto saturateColor = [](float& v) { v = std::clamp(v, 0.0f, 1.0f); };
+		saturateColor(cb->diffuse.x); saturateColor(cb->diffuse.y); saturateColor(cb->diffuse.z); saturateColor(cb->diffuse.w);
+		saturateColor(cb->specular.x); saturateColor(cb->specular.y); saturateColor(cb->specular.z);
+		saturateColor(cb->ambient.x); saturateColor(cb->ambient.y); saturateColor(cb->ambient.z);
+		saturateColor(cb->edgeColor.x); saturateColor(cb->edgeColor.y); saturateColor(cb->edgeColor.z); saturateColor(cb->edgeColor.w);
+		cb->edgeSize = std::max(0.0f, cb->edgeSize);
+	}
 }
 
 void DcompRenderer::UpdateBoneMatrices(const MmdAnimator& animator, UINT frameIndex)
@@ -1713,6 +1949,8 @@ void DcompRenderer::CreateEdgePipeline()
 	DX_CALL(m_ctx.Device()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&m_edgePso)));
 }
 
+// DcompRenderer.cpp の EnsurePmxResources をこれに置き換え
+
 void DcompRenderer::EnsurePmxResources(const PmxModel* model)
 {
 	if (!model || !model->HasGeometry())
@@ -1805,6 +2043,14 @@ void DcompRenderer::EnsurePmxResources(const PmxModel* model)
 		vtx.push_back(pv);
 	}
 
+	// --------------------------------------------------------
+	// モーフ計算用に初期状態を保存 (ここが追加重要ポイント)
+	// --------------------------------------------------------
+	m_baseVertices = vtx;
+	m_workingVertices = vtx;
+	m_morphWeights.resize(model->Morphs().size());
+	// --------------------------------------------------------
+
 	// ここから頂点バッファ作成
 	const UINT vbSize = static_cast<UINT>(vtx.size() * sizeof(PmxVsVertex));
 	const UINT ibSize = static_cast<UINT>(inds.size() * sizeof(uint32_t));
@@ -1868,6 +2114,7 @@ void DcompRenderer::EnsurePmxResources(const PmxModel* model)
 	}
 
 	// マテリアルごとの処理
+	m_pmx.materials.clear();
 	m_pmx.materials.reserve(mats.size());
 
 	for (size_t mi = 0; mi < mats.size(); ++mi)

@@ -334,4 +334,14 @@ private:
 
 	bool m_resizeOverlayEnabled{ false };
 	bool m_disableAutofitWindow{ false };
+
+	std::vector<PmxVsVertex> m_baseVertices;    // 変形前の初期頂点データ
+	std::vector<PmxVsVertex> m_workingVertices; // 変形計算用の一時バッファ
+	std::vector<float> m_morphWeights;          // 展開後の全モーフウェイト
+
+	// 再帰的にモーフウェイトを加算するヘルパー
+	void AddMorphWeight(const PmxModel* model, int morphIndex, float weight, std::vector<float>& totalWeights);
+
+	// モーフ更新のメイン処理
+	void UpdatePmxMorphs(const MmdAnimator& animator);
 };
