@@ -199,6 +199,24 @@ namespace
 	}
 }
 
+void DcompRenderer::SetLightSettings(const LightSettings& light)
+{
+	m_lightSettings = light;
+	UpdateMaterialSettings(); // 設定変更時にマテリアルパラメータも更新
+}
+
+void DcompRenderer::SetResizeOverlayEnabled(bool enabled)
+{
+	m_resizeOverlayEnabled = enabled;
+	m_disableAutofitWindow = enabled;
+}
+
+void DcompRenderer::AdjustBrightness(float delta)
+{
+	m_lightSettings.brightness += delta;
+	m_lightSettings.brightness = std::clamp(m_lightSettings.brightness, 0.1f, 3.0f);
+}
+
 static inline uint8_t To8_10(uint32_t v10)
 {
 	// 0..1023 -> 0..255（丸め込み）
@@ -285,6 +303,70 @@ void DcompRenderer::PresentLayered(UINT frameIndex)
 
 			// DIB は BGRA（メモリ上の並び B,G,R,A）
 			dst[x] = (uint32_t)b8 | ((uint32_t)g8 << 8) | ((uint32_t)r8 << 16) | ((uint32_t)a8 << 24);
+		}
+	}
+
+	if (m_resizeOverlayEnabled)
+	{
+		const int w = static_cast<int>(m_width);
+		const int h = static_cast<int>(m_height);
+		if (w >= 20 && h >= 20)
+		{
+			auto premulWhite = [](uint8_t a) -> uint32_t
+				{
+					// premultiplied BGRA: (a,a,a,a)
+					return (uint32_t)a | ((uint32_t)a << 8) | ((uint32_t)a << 16) | ((uint32_t)a << 24);
+				};
+
+			uint32_t* buf = reinterpret_cast<uint32_t*>(m_layeredBits);
+
+			const uint32_t cOuter = premulWhite(180);
+			const uint32_t cInner = premulWhite(80);
+			const uint32_t cHandle = premulWhite(220);
+
+			auto setPix = [&](int x, int y, uint32_t c)
+				{
+					if ((unsigned)x >= (unsigned)w || (unsigned)y >= (unsigned)h) return;
+					buf[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)] = c;
+				};
+
+			// Outer border (1px)
+			for (int x = 0; x < w; ++x)
+			{
+				setPix(x, 0, cOuter);
+				setPix(x, h - 1, cOuter);
+			}
+			for (int y = 0; y < h; ++y)
+			{
+				setPix(0, y, cOuter);
+				setPix(w - 1, y, cOuter);
+			}
+
+			// Inner border (1px, inset)
+			const int inset = 2;
+			for (int x = inset; x < w - inset; ++x)
+			{
+				setPix(x, inset, cInner);
+				setPix(x, h - 1 - inset, cInner);
+			}
+			for (int y = inset; y < h - inset; ++y)
+			{
+				setPix(inset, y, cInner);
+				setPix(w - 1 - inset, y, cInner);
+			}
+
+			// Corner handles (subtle squares)
+			const int hs = 10;
+			for (int yy = 0; yy < hs; ++yy)
+			{
+				for (int xx = 0; xx < hs; ++xx)
+				{
+					setPix(xx, yy, cHandle);
+					setPix((w - hs) + xx, yy, cHandle);
+					setPix(xx, (h - hs) + yy, cHandle);
+					setPix((w - hs) + xx, (h - hs) + yy, cHandle);
+				}
+			}
 		}
 	}
 
@@ -400,6 +482,10 @@ void DcompRenderer::Initialize(HWND hwnd, ProgressCallback progress)
 	m_baseClientWidth = static_cast<float>(m_width);
 	m_baseClientHeight = static_cast<float>(m_height);
 
+
+	// ウインドウサイズとモデルサイズを独立に扱うため、起動時は自動フィットを無効化。
+	// （必要なら UI/ホットキーで再度有効化してください）
+	m_disableAutofitWindow = true;
 	ReportProgress(0.05f, L"Direct3D を初期化しています...");
 	CreateD3D();
 
@@ -415,6 +501,12 @@ void DcompRenderer::Initialize(HWND hwnd, ProgressCallback progress)
 	CreateDepthBuffer();
 
 	CreateReadbackBuffers();
+
+	// 初回描画前に FXAA 入力用の中間RT を必ず作成しておく。
+	// ResizeIfNeeded() はサイズが変わらないと早期returnするため、
+	// ここで作らないと m_intermediateTex が未作成のままになり Render() が早期returnして
+	// 「起動後に何も表示されない」状態になります。
+	CreateIntermediateResources();
 
 	RecreateLayeredBitmap();
 
@@ -769,7 +861,7 @@ void DcompRenderer::ResizeIfNeeded()
 // 0 = 自動ウィンドウリサイズしない
 // 1 = 自動リサイズする
 #ifndef DCOMP_AUTOFIT_WINDOW
-#define DCOMP_AUTOFIT_WINDOW 1
+#define DCOMP_AUTOFIT_WINDOW 0
 #endif
 
 // 1 の場合、必要エリアが縮んでも解放しない
@@ -865,40 +957,43 @@ void DcompRenderer::UpdateWindowBounds(
 	static uint64_t lastResizeFrame = 0;
 	++frameCounter;
 
-	if (reservedW == 0) reservedW = curWidth;
-	if (reservedH == 0) reservedH = curHeight;
-
-	int desiredW = static_cast<int>(targetWidth);
-	int desiredH = static_cast<int>(targetHeight);
-
-#if DCOMP_AUTOFIT_GROW_ONLY
-	desiredW = std::max(desiredW, reservedW);
-	desiredH = std::max(desiredH, reservedH);
-#endif
-
-	const bool needResize = (desiredW != curWidth) || (desiredH != curHeight);
-	const bool inCooldown = (frameCounter - lastResizeFrame) <= DCOMP_AUTOFIT_COOLDOWN_FRAMES;
-
-	if (needResize && !inCooldown)
+	if (!m_disableAutofitWindow)
 	{
+		if (reservedW == 0) reservedW = curWidth;
+		if (reservedH == 0) reservedH = curHeight;
+
+		int desiredW = static_cast<int>(targetWidth);
+		int desiredH = static_cast<int>(targetHeight);
+
 #if DCOMP_AUTOFIT_GROW_ONLY
-		desiredW = std::max(desiredW, curWidth);
-		desiredH = std::max(desiredH, curHeight);
+		desiredW = std::max(desiredW, reservedW);
+		desiredH = std::max(desiredH, reservedH);
 #endif
 
-		if (desiredW != curWidth || desiredH != curHeight)
+		const bool needResize = (desiredW != curWidth) || (desiredH != curHeight);
+		const bool inCooldown = (frameCounter - lastResizeFrame) <= DCOMP_AUTOFIT_COOLDOWN_FRAMES;
+
+		if (needResize && !inCooldown)
 		{
-			int centerX = wnd.left + curWidth / 2;
-			int centerY = wnd.top + curHeight / 2;
-			int targetLeft = centerX - desiredW / 2;
-			int targetTop = centerY - desiredH / 2;
+#if DCOMP_AUTOFIT_GROW_ONLY
+			desiredW = std::max(desiredW, curWidth);
+			desiredH = std::max(desiredH, curHeight);
+#endif
 
-			SetWindowPos(m_hwnd, nullptr, targetLeft, targetTop, desiredW, desiredH,
-						 SWP_NOZORDER | SWP_NOACTIVATE);
+			if (desiredW != curWidth || desiredH != curHeight)
+			{
+				int centerX = wnd.left + curWidth / 2;
+				int centerY = wnd.top + curHeight / 2;
+				int targetLeft = centerX - desiredW / 2;
+				int targetTop = centerY - desiredH / 2;
 
-			lastResizeFrame = frameCounter;
-			reservedW = std::max(reservedW, desiredW);
-			reservedH = std::max(reservedH, desiredH);
+				SetWindowPos(m_hwnd, nullptr, targetLeft, targetTop, desiredW, desiredH,
+							 SWP_NOZORDER | SWP_NOACTIVATE);
+
+				lastResizeFrame = frameCounter;
+				reservedW = std::max(reservedW, desiredW);
+				reservedH = std::max(reservedH, desiredH);
+			}
 		}
 	}
 #endif
@@ -932,6 +1027,23 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	float minx, miny, minz, maxx, maxy, maxz;
 	animator.GetBounds(minx, miny, minz, maxx, maxy, maxz);
 
+
+	// 足元スナップ用：余白(margin)を入れると底がズレるので、GetBounds() の生値を保持。
+	const float minxSnap = minx;
+	const float minySnap = miny;
+	const float minzSnap = minz;
+	const float maxxSnap = maxx;
+	const float maxySnap = maxy;
+	const float maxzSnap = maxz;
+	// まずリサイズを反映（投影/スナップ計算に最新の m_width/m_height を使う）
+	ResizeIfNeeded();
+	if (!m_intermediateTex || !m_intermediateRtvHeap || !m_intermediateSrvHeap)
+	{
+		// 初期化順や例外経路で中間RTが未作成/解放されている可能性がある。
+		// ここで救済して、Render() の早期returnで真っ透明になるのを防ぐ。
+		CreateIntermediateResources();
+	}
+
 	const float margin = 3.0f;
 	minx -= margin; miny -= margin; minz -= margin;
 	maxx += margin; maxy += margin; maxz += margin;
@@ -945,37 +1057,123 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	const float size = std::max({ sx, sy, sz, 1.0f });
 
 	using namespace DirectX;
-	float scale = (1.0f / size) * m_lightSettings.modelScale;
-	auto motionTransform = DirectX::XMLoadFloat4x4(&animator.MotionTransform());
+	const float scale = (1.0f / size) * m_lightSettings.modelScale;
+	const XMMATRIX motionTransform = DirectX::XMLoadFloat4x4(&animator.MotionTransform());
 
-	XMMATRIX M =
+	// カメラはモデル中心（モーション移動込み）に追従し、距離は一定
+	const XMMATRIX M_track =
 		XMMatrixTranslation(-cx, -cy, -cz) *
 		XMMatrixScaling(scale, scale, scale) *
-		XMMatrixTranslation(m_modelOffset.x, m_modelOffset.y, 0.0f) *
 		motionTransform;
 
 	const float baseDistance = 2.5f;
 	const float distance = std::max(0.1f, baseDistance * m_cameraDistance);
 	const float cosPitch = std::cos(m_cameraPitch);
 
-	XMVECTOR eye = XMVectorSet(
+	XMVECTOR eyeOffset = XMVectorSet(
 		distance * std::sin(m_cameraYaw) * cosPitch,
 		distance * std::sin(m_cameraPitch),
 		-distance * std::cos(m_cameraYaw) * cosPitch,
-		1.0f
+		0.0f
 	);
-	XMVECTOR target = XMVectorZero();
+
+	XMVECTOR target = XMVector3TransformCoord(XMVectorZero(), M_track);
+	XMVECTOR eye = XMVectorAdd(target, eyeOffset);
 	XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
 
 	XMMATRIX V = XMMatrixLookAtLH(eye, target, up);
 
-	UpdateWindowBounds(minx, miny, minz, maxx, maxy, maxz, M, V, XMMatrixIdentity());
+	// カメラ上方向（ワールド）を取得
+	XMMATRIX invV = XMMatrixInverse(nullptr, V);
+	XMVECTOR upWorld = XMVector3Normalize(invV.r[1]);
+
+	// ウインドウサイズとモデルサイズを切り離す：
+	// 画面上のモデルの大きさ（焦点距離）を固定し、ウインドウサイズ変更でモデルが拡大/縮小しないようにする。
+	// UpdateWindowBounds と同じスケール（K）を使う。
+	const float refFov = XMConvertToRadians(30.0f);
+	const float K = 600.0f / std::tan(refFov * 0.5f);
+
+	const float aspect = (m_height > 0) ? (float)m_width / (float)m_height : 1.0f;
+	float fovY = 2.0f * std::atan((m_height > 0) ? ((float)m_height / K) : std::tan(refFov * 0.5f));
+	fovY = std::clamp(fovY, XMConvertToRadians(10.0f), XMConvertToRadians(100.0f));
+	XMMATRIX P = XMMatrixPerspectiveFovLH(fovY, aspect, 0.1f, 100.0f);
+
+	// ---- 足元スナップ（常に底辺に接地させる） ----
+	// AABB の底（minY）を、画面の下端近くに合わせる。
+	// （スムージングや小さすぎるクランプを入れないことで、リサイズ時の「上から落ちてくる」挙動を抑止）
+	float snapT = 0.0f;
+	{
+		UINT clientW = 0, clientH = 0;
+		GetClientSize(m_hwnd, clientW, clientH);
+
+		if (clientW > 0 && clientH > 0)
+		{
+			const float centerY = (float)clientH * 0.5f;
+			const float desiredBottomY = (float)clientH - 2.0f; // 下端からの余白(px)。小さくして足元を底辺に寄せる
+
+			XMFLOAT3 corners[8] = {
+				{ minxSnap, minySnap, minzSnap }, { maxxSnap, minySnap, minzSnap },
+				{ minxSnap, maxySnap, minzSnap }, { maxxSnap, maxySnap, minzSnap },
+				{ minxSnap, minySnap, maxzSnap }, { maxxSnap, minySnap, maxzSnap },
+				{ minxSnap, maxySnap, maxzSnap }, { maxxSnap, maxySnap, maxzSnap }
+			};
+
+			auto CalcBottomYPixels = [&](float t) -> float
+				{
+					const XMMATRIX M_snap =
+						M_track * XMMatrixTranslationFromVector(XMVectorScale(upWorld, t));
+
+					const XMMATRIX MV = M_snap * V;
+
+					float minV = std::numeric_limits<float>::max();
+					for (const auto& c : corners)
+					{
+						XMVECTOR vView = XMVector3TransformCoord(XMLoadFloat3(&c), MV);
+						float z = XMVectorGetZ(vView);
+						if (z < 0.1f) z = 0.1f;
+						float y = XMVectorGetY(vView);
+						float v = y * K / (2.0f * z);
+						minV = std::min(minV, v);
+					}
+					return centerY - minV;
+				};
+
+			// Newton 法で 1〜2 回補正（リサイズ直後でも即座に収束）
+			for (int it = 0; it < 2; ++it)
+			{
+				const float y0 = CalcBottomYPixels(snapT);
+				const float err = desiredBottomY - y0;
+				if (std::fabs(err) < 0.25f) break;
+
+				const float eps = 0.01f; // 正規化後モデル空間での微小移動
+				const float yp = CalcBottomYPixels(snapT + eps);
+				const float ym = CalcBottomYPixels(snapT - eps);
+				const float deriv = (yp - ym) / (2.0f * eps);
+				if (std::fabs(deriv) < 1e-4f) break;
+
+				snapT += err / deriv;
+				snapT = std::clamp(snapT, -50.0f, 50.0f);
+			}
+		}
+	}
+
+	// レンダリング用モデル行列（スナップ → ユーザーオフセット）
+	XMMATRIX M =
+		M_track *
+		XMMatrixTranslationFromVector(XMVectorScale(upWorld, snapT)) *
+		XMMatrixTranslation(m_modelOffset.x, m_modelOffset.y, 0.0f);
+
+	UpdateWindowBounds(minx, miny, minz, maxx, maxy, maxz, M, V, P);
 	ResizeIfNeeded();
 
 	const UINT frameIndex = m_swapChain->GetCurrentBackBufferIndex();
 	WaitForFrame(frameIndex);
 
-	if (!m_dsvHeap || !m_depth || !m_intermediateTex) return;
+	if (!m_intermediateTex || !m_intermediateRtvHeap || !m_intermediateSrvHeap)
+	{
+		CreateIntermediateResources();
+	}
+	if (!m_dsvHeap || !m_depth || !m_intermediateTex || !m_intermediateRtvHeap || !m_intermediateSrvHeap) return;
 
 	m_alloc[frameIndex]->Reset();
 	m_cmdList->Reset(m_alloc[frameIndex].Get(), nullptr);
@@ -1071,11 +1269,6 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 		scene->enableToon = m_lightSettings.toonEnabled ? 1u : 0u;
 		scene->enableSkinning = animator.HasSkinnedPose() ? 1 : 0;
 		XMStoreFloat3(&scene->cameraPos, eye);
-
-		const float aspect = (m_height != 0) ? (float)m_width / (float)m_height : 1.0f;
-		const float fovY = XMConvertToRadians(30.0f);
-		XMMATRIX P = XMMatrixPerspectiveFovLH(fovY, aspect, 0.1f, 100.0f);
-
 		XMMATRIX MVP = M * V * P;
 		XMStoreFloat4x4(&scene->model, XMMatrixTranspose(M));
 		XMStoreFloat4x4(&scene->view, XMMatrixTranspose(V));
@@ -1246,7 +1439,7 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	m_frameFenceValues[frameIndex] = signalValue;
 
 	WaitForFrame(frameIndex);
-	PresentLayered(frameIndex); 
+	PresentLayered(frameIndex);
 }
 
 void DcompRenderer::UpdateBoneMatrices(const MmdAnimator& animator, UINT frameIndex)
@@ -2381,22 +2574,10 @@ void DcompRenderer::SelectMaximumMsaa()
 	}
 }
 
-void DcompRenderer::SetLightSettings(const LightSettings& light)
-{
-	m_lightSettings = light;
-	UpdateMaterialSettings(); // 設定変更時にマテリアルパラメータも更新
-}
-
-void DcompRenderer::AdjustBrightness(float delta)
-{
-	m_lightSettings.brightness += delta;
-	m_lightSettings.brightness = std::clamp(m_lightSettings.brightness, 0.1f, 3.0f);
-}
-
 void DcompRenderer::AdjustScale(float delta)
 {
 	m_lightSettings.modelScale += delta;
-	m_lightSettings.modelScale = std::clamp(m_lightSettings.modelScale, 0.1f, 5.0f);
+	m_lightSettings.modelScale = std::clamp(m_lightSettings.modelScale, 0.1f, 8.75f);
 }
 
 void DcompRenderer::AddCameraRotation(float dxPixels, float dyPixels)

@@ -54,6 +54,7 @@ public:
 							  std::function<void(float, const wchar_t*)> onProgress,
 							  float startProgress, float endProgress);
 
+	void SetResizeOverlayEnabled(bool enabled);
 private:
 	void CreateD3D();
 	void CreateSwapChain();
@@ -330,4 +331,7 @@ private:
 
 	void RecreateLayeredBitmap();
 	void PresentLayered(UINT frameIndex);
+
+	bool m_resizeOverlayEnabled{ false };
+	bool m_disableAutofitWindow{ false };
 };

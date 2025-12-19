@@ -37,10 +37,14 @@ namespace
 
 	constexpr int kHotKeyToggleGizmoId = 1;
 	constexpr int kHotKeyTogglePhysicsId = 2;
+	constexpr int kHotKeyToggleWindowManipId = 3;
+
 	constexpr UINT kHotKeyToggleGizmoMods = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
 	constexpr UINT kHotKeyToggleGizmoVk = 'G';
 	constexpr UINT kHotKeyTogglePhysicsMods = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
 	constexpr UINT kHotKeyTogglePhysicsVk = 'P';
+	constexpr UINT kHotKeyToggleWindowManipMods = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+	constexpr UINT kHotKeyToggleWindowManipVk = 'R';
 
 	enum TrayCmd : UINT
 	{
@@ -49,6 +53,7 @@ namespace
 		CMD_STOP_MOTION = 102,
 		CMD_TOGGLE_PAUSE = 103,
 		CMD_TOGGLE_PHYSICS = 104,
+		CMD_TOGGLE_WINDOW_MANIP = 105,
 		CMD_EXIT = 199,
 		CMD_MOTION_BASE = 1000
 	};
@@ -61,6 +66,97 @@ namespace
 	DWORD GetWindowStyleForRender()
 	{
 		return WS_POPUP;
+	}
+
+	constexpr wchar_t kPropWindowManipulationMode[] = L"MMDDesk.WindowManipulationMode";
+
+	bool IsWindowManipulationMode(HWND hWnd)
+	{
+		return hWnd && GetPropW(hWnd, kPropWindowManipulationMode) != nullptr;
+	}
+
+	void SetWindowManipulationModeProp(HWND hWnd, bool enabled)
+	{
+		if (!hWnd) return;
+		if (enabled)
+		{
+			SetPropW(hWnd, kPropWindowManipulationMode, reinterpret_cast<HANDLE>(1));
+		}
+		else
+		{
+			RemovePropW(hWnd, kPropWindowManipulationMode);
+		}
+	}
+
+	void ApplyWindowManipulationMode(HWND hWnd, DcompRenderer* renderer, bool enabled)
+	{
+		if (!hWnd) return;
+
+		SetWindowManipulationModeProp(hWnd, enabled);
+
+		if (renderer)
+		{
+			renderer->SetResizeOverlayEnabled(enabled);
+		}
+
+		// 子ウィンドウも含めて透過/非アクティブ化を切り替える
+		auto applyTo = [enabled](HWND w)
+			{
+				if (!w) return;
+
+				EnableWindow(w, enabled ? TRUE : FALSE);
+
+				LONG_PTR ex = GetWindowLongPtrW(w, GWL_EXSTYLE);
+				if (enabled)
+				{
+					ex &= ~(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE);
+				}
+				else
+				{
+					ex |= (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE);
+				}
+				SetWindowLongPtrW(w, GWL_EXSTYLE, ex);
+			};
+
+		applyTo(hWnd);
+		EnumChildWindows(
+			hWnd,
+			[](HWND child, LPARAM lp) -> BOOL
+			{
+				const bool en = (lp != 0);
+				EnableWindow(child, en ? TRUE : FALSE);
+
+				LONG_PTR ex = GetWindowLongPtrW(child, GWL_EXSTYLE);
+				if (en)
+				{
+					ex &= ~(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE);
+				}
+				else
+				{
+					ex |= (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE);
+				}
+				SetWindowLongPtrW(child, GWL_EXSTYLE, ex);
+
+				SetWindowPos(child, nullptr, 0, 0, 0, 0,
+							 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+				return TRUE;
+			},
+			enabled ? 1 : 0);
+
+		// システムのリサイズを使うためのスタイル（見た目は WM_NCCALCSIZE 等で消す）
+		LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+		if (enabled)
+		{
+			style |= WS_THICKFRAME;
+		}
+		else
+		{
+			style &= ~WS_THICKFRAME;
+		}
+		SetWindowLongPtrW(hWnd, GWL_STYLE, style);
+
+		SetWindowPos(hWnd, nullptr, 0, 0, 0, 0,
+					 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 	}
 }
 
@@ -106,6 +202,10 @@ App::App(HINSTANCE hInst) : m_hInst(hInst)
 	{
 		OutputDebugStringA("RegisterHotKey failed (Ctrl+Alt+P).\n");
 	}
+	if (!RegisterHotKey(m_renderWnd, kHotKeyToggleWindowManipId, kHotKeyToggleWindowManipMods, kHotKeyToggleWindowManipVk))
+	{
+		OutputDebugStringA("RegisterHotKey failed (Ctrl+Alt+R).\n");
+	}
 	CreateGizmoWindow();
 
 	ApplyTopmost();
@@ -125,6 +225,7 @@ App::~App()
 	if (m_msgWnd) KillTimer(m_msgWnd, kTimerId);
 	if (m_renderWnd) UnregisterHotKey(m_renderWnd, kHotKeyToggleGizmoId);
 	if (m_renderWnd) UnregisterHotKey(m_renderWnd, kHotKeyTogglePhysicsId);
+	if (m_renderWnd) UnregisterHotKey(m_renderWnd, kHotKeyToggleWindowManipId);
 	if (m_gizmoWnd) DestroyWindow(m_gizmoWnd);
 
 	// GDIリソースの解放
@@ -398,10 +499,18 @@ void App::CreateRenderWindow()
 		throw std::runtime_error("RegisterClassExW (RenderWindow) failed.");
 	}
 
-	const int w = 400;
-	const int h = 600;
-	const int x = GetSystemMetrics(SM_CXSCREEN) - w - 50;
-	const int y = GetSystemMetrics(SM_CYSCREEN) - h - 100;
+	const int screenW = GetSystemMetrics(SM_CXSCREEN);
+	const int screenH = GetSystemMetrics(SM_CYSCREEN);
+
+	int w = 400;
+	int h = 600;
+#if !DCOMP_AUTOFIT_WINDOW
+	// 自動フィット無効時は、初期サイズが小さすぎないようにする
+	w = std::clamp(screenW / 3, 480, 720);
+	h = std::clamp((screenH * 2) / 3, 720, 1200);
+#endif
+	const int x = screenW - w - 50;
+	const int y = screenH - h - 100;
 
 	m_renderWnd = CreateWindowExW(
 		GetWindowStyleExForRender(),
@@ -555,7 +664,7 @@ void App::EnsureGizmoD2D()
 			D2D1_RENDER_TARGET_TYPE_SOFTWARE,
 			D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
 			0.0f, 0.0f,
-			D2D1_RENDER_TARGET_USAGE_NONE, 
+			D2D1_RENDER_TARGET_USAGE_NONE,
 			D2D1_FEATURE_LEVEL_DEFAULT
 		);
 
@@ -736,9 +845,56 @@ LRESULT CALLBACK App::RenderClickThroughProc(HWND hWnd, UINT msg, WPARAM wParam,
 	switch (msg)
 	{
 		case WM_NCHITTEST:
-			return HTTRANSPARENT;
+		{
+			if (!IsWindowManipulationMode(hWnd))
+			{
+				return HTTRANSPARENT;
+			}
+
+			POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+			RECT rc{};
+			GetWindowRect(hWnd, &rc);
+
+			const UINT dpi = GetDpiForWindow(hWnd);
+			const float s = (dpi > 0) ? (static_cast<float>(dpi) / 96.0f) : 1.0f;
+			int border = static_cast<int>(14.0f * s + 0.5f);
+			border = std::clamp(border, 10, 32);
+
+			const bool left = (pt.x >= rc.left && pt.x < rc.left + border);
+			const bool right = (pt.x <= rc.right && pt.x > rc.right - border);
+			const bool top = (pt.y >= rc.top && pt.y < rc.top + border);
+			const bool bottom = (pt.y <= rc.bottom && pt.y > rc.bottom - border);
+
+			if (top && left) return HTTOPLEFT;
+			if (top && right) return HTTOPRIGHT;
+			if (bottom && left) return HTBOTTOMLEFT;
+			if (bottom && right) return HTBOTTOMRIGHT;
+			if (left) return HTLEFT;
+			if (right) return HTRIGHT;
+			if (top) return HTTOP;
+			if (bottom) return HTBOTTOM;
+
+			// 内側はドラッグ移動（操作モード中はモデル操作よりウィンドウ操作を優先）
+			return HTCAPTION;
+		}
 		case WM_MOUSEACTIVATE:
-			return MA_NOACTIVATE;
+			return IsWindowManipulationMode(hWnd) ? MA_ACTIVATE : MA_NOACTIVATE;
+
+		case WM_NCCALCSIZE:
+			// 枠は自前オーバーレイで表現するので、非クライアントを消す（モダンな見た目）
+			if (IsWindowManipulationMode(hWnd))
+			{
+				return 0;
+			}
+			break;
+
+		case WM_NCPAINT:
+		case WM_NCACTIVATE:
+			if (IsWindowManipulationMode(hWnd))
+			{
+				return 0;
+			}
+			break;
 		default:
 			break;
 	}
@@ -772,6 +928,11 @@ void App::BuildTrayMenu()
 	m_trayMenu = CreatePopupMenu();
 
 	AppendMenuW(m_trayMenu, MF_STRING, CMD_OPEN_SETTINGS, L"設定...");
+
+	UINT manipFlags = MF_STRING;
+	manipFlags |= IsWindowManipulationMode(m_renderWnd) ? MF_CHECKED : MF_UNCHECKED;
+	AppendMenuW(m_trayMenu, manipFlags, CMD_TOGGLE_WINDOW_MANIP, L"ウィンドウ操作モード (Ctrl+Alt+R)");
+
 	AppendMenuW(m_trayMenu, MF_SEPARATOR, 0, nullptr);
 
 	RefreshMotionList();
@@ -955,6 +1116,11 @@ void App::OnTrayCommand(UINT id)
 			}
 			break;
 
+		case CMD_TOGGLE_WINDOW_MANIP:
+			ApplyWindowManipulationMode(m_renderWnd, m_renderer.get(), !IsWindowManipulationMode(m_renderWnd));
+			BuildTrayMenu();
+			break;
+
 		case CMD_EXIT:
 			PostQuitMessage(0);
 			break;
@@ -1104,6 +1270,12 @@ LRESULT App::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 					m_animator->TogglePhysics();
 					BuildTrayMenu();
 				}
+				return 0;
+			}
+			if (wParam == kHotKeyToggleWindowManipId)
+			{
+				ApplyWindowManipulationMode(m_renderWnd, m_renderer.get(), !IsWindowManipulationMode(m_renderWnd));
+				BuildTrayMenu();
 				return 0;
 			}
 			break;
