@@ -55,6 +55,11 @@ public:
 		m_physicsEnabled = !m_physicsEnabled;
 	}
 
+	// --- LookAt 機能 ---
+	void SetLookAtState(bool enabled, float yaw, float pitch);
+	DirectX::XMFLOAT3 GetBoneGlobalPosition(const std::wstring& boneName) const;
+	// ------------------
+
 	const PmxModel* Model() const
 	{
 		return m_model.get();
@@ -115,11 +120,23 @@ private:
 
 	// キャッシュ用メンバ変数
 	const VmdMotion* m_cachedMotionPtr = nullptr;
-	std::vector<int> m_boneTrackToBoneIndex;     // トラック番号 -> モデルのボーンIndex
-	std::vector<int> m_morphTrackToMorphIndex;   // トラック番号 -> モデルのモーフIndex
-	std::vector<size_t> m_boneKeyCursors;        // キーフレーム探索用カーソル
-	std::vector<size_t> m_morphKeyCursors;       // モーフキー探索用カーソル
+	std::vector<int> m_boneTrackToBoneIndex;
+	std::vector<int> m_morphTrackToMorphIndex;
+	std::vector<size_t> m_boneKeyCursors;
+	std::vector<size_t> m_morphKeyCursors;
 
-	// 内部メソッド定義
+	// LookAt用
+	bool m_lookAtEnabled{ false };
+	float m_lookAtYaw{ 0.0f };
+	float m_lookAtPitch{ 0.0f };
+
+	// LookAt対象ボーンのインデックスキャッシュ
+	int32_t m_boneIdxHead{ -1 };
+	int32_t m_boneIdxNeck{ -1 };
+	int32_t m_boneIdxEyeL{ -1 };
+	int32_t m_boneIdxEyeR{ -1 };
+
+	void CacheLookAtBones();
+
 	void UpdateMotionCache(const VmdMotion* motion);
 };

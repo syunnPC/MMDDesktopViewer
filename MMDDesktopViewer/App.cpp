@@ -55,6 +55,7 @@ namespace
 		CMD_TOGGLE_PHYSICS = 104,
 		CMD_TOGGLE_WINDOW_MANIP = 105,
 		CMD_EXIT = 199,
+		CMD_TOGGLE_LOOKAT = 106,
 		CMD_MOTION_BASE = 1000
 	};
 
@@ -442,6 +443,38 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 void App::OnTimer()
 {
 	if (m_isLoading) return;
+
+	// LookAt 計算
+	if (m_lookAtEnabled && m_animator && m_renderer)
+	{
+		POINT pt{};
+		GetCursorPos(&pt);
+		ScreenToClient(m_renderWnd, &pt);
+
+		// 頭の現在位置（3D）を取得
+		auto headPos3D = m_animator->GetBoneGlobalPosition(L"頭");
+
+		// 頭のスクリーン位置を取得
+		auto headPosScreen = m_renderer->ProjectToScreen(headPos3D);
+
+		// スクリーン上での偏差
+		float dx = (float)pt.x - headPosScreen.x;
+		float dy = (float)pt.y - headPosScreen.y;
+
+		RECT rc;
+		GetClientRect(m_renderWnd, &rc);
+		float h = (float)(rc.bottom - rc.top);
+		if (h < 1.0f) h = 1.0f;
+
+		float dist = h * 1.5f; // 係数で感度調整
+
+		// dx(右) -> 右を向くにはY軸負回転
+		float yaw = -std::atan2(dx, dist);
+
+		float pitch = -std::atan2(dy, dist);
+
+		m_animator->SetLookAtState(true, yaw, pitch);
+	}
 
 	if (m_animator)
 	{
@@ -945,6 +978,11 @@ void App::BuildTrayMenu()
 	std::wstring physText = (m_animator && m_animator->PhysicsEnabled()) ? L"物理: ON" : L"物理: OFF";
 	AppendMenuW(motionMenu, MF_STRING, CMD_TOGGLE_PHYSICS, physText.c_str());
 
+	// 追加: LookAt メニュー
+	UINT lookAtFlags = MF_STRING;
+	lookAtFlags |= m_lookAtEnabled ? MF_CHECKED : MF_UNCHECKED;
+	AppendMenuW(motionMenu, lookAtFlags, CMD_TOGGLE_LOOKAT, L"視線追従 (LookAt)");
+
 	AppendMenuW(motionMenu, MF_STRING, CMD_STOP_MOTION, L"停止 (リセット)");
 	AppendMenuW(motionMenu, MF_SEPARATOR, 0, nullptr);
 
@@ -1114,6 +1152,16 @@ void App::OnTrayCommand(UINT id)
 				m_animator->TogglePhysics();
 				BuildTrayMenu();
 			}
+			break;
+
+		case CMD_TOGGLE_LOOKAT:
+			m_lookAtEnabled = !m_lookAtEnabled;
+			// 無効化時はリセットする
+			if (m_animator)
+			{
+				m_animator->SetLookAtState(m_lookAtEnabled, 0.0f, 0.0f);
+			}
+			BuildTrayMenu();
 			break;
 
 		case CMD_TOGGLE_WINDOW_MANIP:

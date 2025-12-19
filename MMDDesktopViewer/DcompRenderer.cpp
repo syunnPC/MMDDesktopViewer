@@ -1160,6 +1160,11 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	UpdateWindowBounds(minx, miny, minz, maxx, maxy, maxz, M, V, P);
 	ResizeIfNeeded();
 
+	XMStoreFloat4x4(&m_lastModelMatrix, M);
+	XMStoreFloat4x4(&m_lastViewMatrix, V);
+	XMStoreFloat4x4(&m_lastProjMatrix, P);
+	m_matricesValid = true;
+
 	const UINT frameIndex = m_swapChain->GetCurrentBackBufferIndex();
 	WaitForFrame(frameIndex);
 
@@ -2989,4 +2994,39 @@ void DcompRenderer::LoadTexturesForModel(const PmxModel* model,
 
 		LoadTextureSrv(texPaths[i]);
 	}
+}
+
+DirectX::XMFLOAT3 DcompRenderer::ProjectToScreen(const DirectX::XMFLOAT3& localPos) const
+{
+	using namespace DirectX;
+	if (!m_matricesValid || m_width == 0 || m_height == 0)
+	{
+		return { 0.0f, 0.0f, 0.0f };
+	}
+
+	XMMATRIX M = XMLoadFloat4x4(&m_lastModelMatrix);
+	XMMATRIX V = XMLoadFloat4x4(&m_lastViewMatrix);
+	XMMATRIX P = XMLoadFloat4x4(&m_lastProjMatrix);
+
+	XMVECTOR local = XMLoadFloat3(&localPos);
+	// local.w = 1.0
+	local = XMVectorSetW(local, 1.0f);
+
+	// World Space
+	XMVECTOR world = XMVector3TransformCoord(local, M);
+
+	// Clip Space
+	XMVECTOR clip = XMVector3Transform(world, V * P); // TransformCoordはwで割ってしまうのでTransformを使う
+
+	float w = XMVectorGetW(clip);
+	if (w < 0.001f) w = 0.001f;
+
+	// NDC
+	XMVECTOR ndc = XMVectorScale(clip, 1.0f / w);
+
+	// Viewport
+	float x = (XMVectorGetX(ndc) + 1.0f) * 0.5f * (float)m_width;
+	float y = (1.0f - XMVectorGetY(ndc)) * 0.5f * (float)m_height;
+
+	return { x, y, w };
 }

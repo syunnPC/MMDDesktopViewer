@@ -143,4 +143,6 @@ private:
 	static void MakeClickThrough(HWND hWnd);
 
 	void DiscardGizmoD2D();
+
+	bool m_lookAtEnabled{ false };
 };

@@ -63,15 +63,7 @@ bool MmdAnimator::LoadModel(const std::filesystem::path& pmx)
 	auto model = std::make_unique<PmxModel>();
 	if (model->Load(pmx))
 	{
-		m_model = std::move(model);
-		m_time = 0.0;
-		m_pose = {};
-		m_hasSkinnedPose = false;
-
-		// ボーンソルバーを初期化
-		m_boneSolver->Initialize(m_model.get());
-		if (m_physicsWorld) m_physicsWorld->Reset();
-
+		SetModel(std::move(model));
 		return true;
 	}
 	return false;
@@ -178,10 +170,32 @@ void MmdAnimator::UpdateMotionCache(const VmdMotion* motion)
 	m_morphKeyCursors.resize(morphTracks.size(), 0);
 }
 
+void MmdAnimator::CacheLookAtBones()
+{
+	m_boneIdxHead = -1;
+	m_boneIdxNeck = -1;
+	m_boneIdxEyeL = -1;
+	m_boneIdxEyeR = -1;
+
+	if (!m_model) return;
+
+	const auto& bones = m_model->Bones();
+	for (int i = 0; i < (int)bones.size(); ++i)
+	{
+		const auto& name = bones[i].name;
+		if (name == L"頭") m_boneIdxHead = i;
+		else if (name == L"首") m_boneIdxNeck = i;
+		else if (name == L"左目") m_boneIdxEyeL = i;
+		else if (name == L"右目") m_boneIdxEyeR = i;
+	}
+}
+
 void MmdAnimator::Tick(double dtSeconds)
 {
-	if (m_paused) return;
-	m_time += dtSeconds;
+	if (!m_paused)
+	{
+		m_time += dtSeconds;
+	}
 
 	if (!m_model)
 	{
@@ -191,7 +205,7 @@ void MmdAnimator::Tick(double dtSeconds)
 
 	const VmdMotion* motion = m_motion.get();
 
-	// キャッシュ更新 (高速)
+	// キャッシュ更新
 	UpdateMotionCache(motion);
 
 	const float currentFrameRaw = static_cast<float>(m_time * m_fps);
@@ -202,7 +216,7 @@ void MmdAnimator::Tick(double dtSeconds)
 		currentFrame = NormalizeFrame(currentFrameRaw, maxFrame);
 	}
 
-	// 物理リセット判定 (シークやループ時のスパイク対策)
+	// 物理リセット判定
 	if (motion && m_prevFrameForPhysicsValid)
 	{
 		if (currentFrame + 0.5f < m_prevFrameForPhysics ||
@@ -213,8 +227,6 @@ void MmdAnimator::Tick(double dtSeconds)
 	}
 
 	// ポーズ初期化
-	// 文字列マップへのクリアはコストがかかるため、必要な場合のみ行う設計も考えられますが、
-	// 安全のためクリアします。
 	m_pose.boneTranslations.clear();
 	m_pose.boneRotations.clear();
 	m_pose.morphWeights.clear();
@@ -226,29 +238,23 @@ void MmdAnimator::Tick(double dtSeconds)
 		const auto& boneTracks = motion->BoneTracks();
 		const size_t numBoneTracks = boneTracks.size();
 
-		// 多くのトラックがあるため並列化も視野に入るが、std::mapへの書き込みがあるためシングルスレッド推奨
 		for (size_t i = 0; i < numBoneTracks; ++i)
 		{
-			// モデルに存在しないボーンはスキップ (キャッシュ利用)
 			if (m_boneTrackToBoneIndex[i] == -1) continue;
 
 			const auto& track = boneTracks[i];
 			const auto& keys = track.keys;
 			if (keys.empty()) continue;
 
-			// キーフレーム探索 (キャッシュされたカーソルを利用して高速化)
 			size_t kIdx = m_boneKeyCursors[i];
-
-			// カーソル位置の妥当性チェックと巻き戻し
 			if (kIdx >= keys.size() - 1) kIdx = 0;
 			if (keys[kIdx].frame > currentFrame) kIdx = 0;
 
-			// 線形探索 (開始位置が正しければ数回の反復で済む)
 			while (kIdx + 1 < keys.size() && keys[kIdx + 1].frame <= currentFrame)
 			{
 				kIdx++;
 			}
-			m_boneKeyCursors[i] = kIdx; // カーソル更新
+			m_boneKeyCursors[i] = kIdx;
 
 			const auto& k0 = keys[kIdx];
 			const auto* k1 = (kIdx + 1 < keys.size()) ? &keys[kIdx + 1] : &k0;
@@ -261,7 +267,6 @@ void MmdAnimator::Tick(double dtSeconds)
 				t = std::clamp(t, 0.0f, 1.0f);
 			}
 
-			// 補間計算
 			const std::uint8_t* base = k0.interp;
 			float txT = EvaluateChannelT(base + 0, t);
 			float tyT = EvaluateChannelT(base + 16, t);
@@ -283,21 +288,15 @@ void MmdAnimator::Tick(double dtSeconds)
 			XMFLOAT4 rot;
 			XMStoreFloat4(&rot, q);
 
-			// 特殊ボーン名の処理
 			if (track.name == L"全ての親")
 			{
 				trans = { 0.0f, 0.0f, 0.0f };
 			}
-			else if (track.name == L"センター")
-			{
-				trans.x = 0.0f; trans.z = 0.0f;
-			}
-			else if (track.name == L"グルーブ")
+			else if (track.name == L"センター" || track.name == L"グルーブ")
 			{
 				trans.x = 0.0f; trans.z = 0.0f;
 			}
 
-			// 結果を格納
 			m_pose.boneTranslations[track.name] = trans;
 			m_pose.boneRotations[track.name] = rot;
 		}
@@ -308,9 +307,6 @@ void MmdAnimator::Tick(double dtSeconds)
 
 		for (size_t i = 0; i < numMorphTracks; ++i)
 		{
-			// モーフインデックスが無効でもポーズには反映させる必要があるため、
-			// ボーンのようなスキップは慎重に行う必要があるが、今回は全トラック処理する方針とする
-
 			const auto& track = morphTracks[i];
 			const auto& keys = track.keys;
 			if (keys.empty()) continue;
@@ -341,9 +337,75 @@ void MmdAnimator::Tick(double dtSeconds)
 		}
 	}
 
+	if (m_lookAtEnabled && m_model)
+	{
+		using namespace DirectX;
+
+		// 基本設定値 (ラジアン)
+		const float baseDeadZone = XMConvertToRadians(15.0f);   // 通常のデッドゾーン
+		const float deadZoneUp = XMConvertToRadians(5.0f);     // 上向き時のデッドゾーン（狭める＝すぐ首が動く）
+
+		const float maxNeckYaw = XMConvertToRadians(50.0f);     // 首の横回転制限
+		const float maxNeckPitchUp = XMConvertToRadians(25.0f);   // 上向き首制限 (破綻防止のため少し控えめに)
+		const float maxNeckPitchDown = XMConvertToRadians(35.0f); // 下向き首制限
+		const float maxEye = XMConvertToRadians(20.0f);         // 目の回転制限
+
+		// ヘルパー: 目と首の配分計算
+		auto ComputeBoneAngles = [&](float target, float deadZone, float maxNeck, float& outNeck, float& outEye)
+			{
+				if (std::abs(target) <= deadZone)
+				{
+					outNeck = 0.0f;
+					outEye = target;
+				}
+				else
+				{
+					float sign = (target >= 0.0f) ? 1.0f : -1.0f;
+					float excess = target - (sign * deadZone);
+					float neck = std::clamp(excess, -maxNeck, maxNeck);
+					outNeck = neck;
+					outEye = std::clamp(target - neck, -maxEye, maxEye);
+				}
+			};
+
+		float neckYaw, eyeYaw;
+		ComputeBoneAngles(m_lookAtYaw, baseDeadZone, maxNeckYaw, neckYaw, eyeYaw);
+
+		// 上向き判定 (App.cppの実装依存：pitch正が上向きと仮定)
+		bool isUpward = (m_lookAtPitch > 0.0f);
+
+		float currentDeadZone = isUpward ? deadZoneUp : baseDeadZone;
+		float currentMaxNeckPitch = isUpward ? maxNeckPitchUp : maxNeckPitchDown;
+
+		float neckPitch, eyePitch;
+		ComputeBoneAngles(m_lookAtPitch, currentDeadZone, currentMaxNeckPitch, neckPitch, eyePitch);
+
+		// 首と頭で半分ずつ負担
+		XMVECTOR qHeadNeck = XMQuaternionRotationRollPitchYaw(neckPitch * 0.5f, neckYaw * 0.5f, 0.0f);
+		XMVECTOR qEyes = XMQuaternionRotationRollPitchYaw(eyePitch, eyeYaw, 0.0f);
+
+		auto ApplyRot = [&](int32_t idx, XMVECTOR qOffset) {
+			if (idx < 0) return;
+			const auto& name = m_model->Bones()[idx].name;
+
+			XMVECTOR current = XMQuaternionIdentity();
+			if (m_pose.boneRotations.count(name))
+			{
+				current = XMLoadFloat4(&m_pose.boneRotations[name]);
+			}
+			XMVECTOR next = XMQuaternionMultiply(current, qOffset);
+			XMStoreFloat4(&m_pose.boneRotations[name], next);
+			};
+
+		ApplyRot(m_boneIdxNeck, qHeadNeck);
+		ApplyRot(m_boneIdxHead, qHeadNeck);
+		ApplyRot(m_boneIdxEyeL, qEyes);
+		ApplyRot(m_boneIdxEyeR, qEyes);
+	}
+
 	// 行列更新 (FK)
 	m_boneSolver->ApplyPose(m_pose);
-	m_boneSolver->UpdateMatrices(); // ここでIKも解決される
+	m_boneSolver->UpdateMatrices();
 
 	// 物理演算
 	if (m_physicsEnabled && m_physicsWorld && m_model && !m_model->RigidBodies().empty())
@@ -356,7 +418,6 @@ void MmdAnimator::Tick(double dtSeconds)
 		if (m_physicsWorld->IsBuilt())
 		{
 			m_physicsWorld->Step(dtSeconds, *m_model, *m_boneSolver);
-			// 物理適用後はIKを回さずに行列のみ更新
 			m_boneSolver->UpdateMatricesNoIK();
 		}
 	}
@@ -381,7 +442,6 @@ size_t MmdAnimator::GetBoneCount() const
 bool MmdAnimator::LoadModel(const std::filesystem::path& pmx, std::function<void(float, const wchar_t*)> onProgress)
 {
 	auto model = std::make_unique<PmxModel>();
-	// コールバックを渡す
 	if (model->Load(pmx, onProgress))
 	{
 		SetModel(std::move(model));
@@ -398,6 +458,7 @@ void MmdAnimator::SetModel(std::unique_ptr<PmxModel> model)
 	m_hasSkinnedPose = false;
 	m_boneSolver->Initialize(m_model.get());
 	if (m_physicsWorld) m_physicsWorld->Reset();
+	CacheLookAtBones();
 }
 
 void MmdAnimator::GetBounds(float& minx, float& miny, float& minz, float& maxx, float& maxy, float& maxz) const
@@ -411,7 +472,6 @@ void MmdAnimator::GetBounds(float& minx, float& miny, float& minz, float& maxx, 
 	}
 	else if (m_model)
 	{
-		// 初期状態のバウンディングボックス
 		m_model->GetBounds(minx, miny, minz, maxx, maxy, maxz);
 	}
 	else
@@ -419,4 +479,41 @@ void MmdAnimator::GetBounds(float& minx, float& miny, float& minz, float& maxx, 
 		minx = miny = minz = -1.0f;
 		maxx = maxy = maxz = 1.0f;
 	}
+}
+
+void MmdAnimator::SetLookAtState(bool enabled, float yaw, float pitch)
+{
+	m_lookAtEnabled = enabled;
+	m_lookAtYaw = yaw;
+	m_lookAtPitch = pitch;
+
+	const float limit = DirectX::XMConvertToRadians(90.0f);
+	m_lookAtYaw = std::clamp(m_lookAtYaw, -limit, limit);
+	m_lookAtPitch = std::clamp(m_lookAtPitch, -limit, limit);
+}
+
+DirectX::XMFLOAT3 MmdAnimator::GetBoneGlobalPosition(const std::wstring& boneName) const
+{
+	if (!m_boneSolver || !m_model) return { 0,0,0 };
+
+	int idx = -1;
+	if (boneName == L"頭") idx = m_boneIdxHead;
+	else
+	{
+		const auto& bones = m_model->Bones();
+		for (size_t i = 0; i < bones.size(); ++i)
+		{
+			if (bones[i].name == boneName)
+			{
+				idx = (int)i; break;
+			}
+		}
+	}
+
+	if (idx >= 0 && idx < (int)m_boneSolver->BoneCount())
+	{
+		const auto& mat = m_boneSolver->GetBoneGlobalMatrix(idx);
+		return { mat._41, mat._42, mat._43 };
+	}
+	return { 0,0,0 };
 }

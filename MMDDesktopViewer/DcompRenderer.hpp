@@ -50,6 +50,9 @@ public:
 	void AddModelOffsetPixels(float dxPixels, float dyPixels);
 	bool IsPointOnModel(const POINT& clientPoint);
 
+	// 3D空間(Model Local)の座標をスクリーン(クライアント)座標に変換する
+	DirectX::XMFLOAT3 ProjectToScreen(const DirectX::XMFLOAT3& localPos) const;
+
 	void LoadTexturesForModel(const PmxModel* model,
 							  std::function<void(float, const wchar_t*)> onProgress,
 							  float startProgress, float endProgress);
@@ -106,6 +109,12 @@ private:
 	float m_cameraYaw{ 0.0f };
 	float m_cameraPitch{ 0.0f };
 	float m_cameraDistance{ 2.5f };
+
+	// 座標変換用に前フレームの行列をキャッシュ
+	DirectX::XMFLOAT4X4 m_lastModelMatrix{};
+	DirectX::XMFLOAT4X4 m_lastViewMatrix{};
+	DirectX::XMFLOAT4X4 m_lastProjMatrix{};
+	bool m_matricesValid{ false };
 
 	void CreatePmxPipeline();
 	void EnsurePmxResources(const PmxModel* model);
