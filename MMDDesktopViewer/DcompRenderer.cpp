@@ -208,7 +208,8 @@ void DcompRenderer::SetLightSettings(const LightSettings& light)
 void DcompRenderer::SetResizeOverlayEnabled(bool enabled)
 {
 	m_resizeOverlayEnabled = enabled;
-	m_disableAutofitWindow = enabled;
+	// ここで自動フィット状態を切り替えると「ウインドウサイズとモデルサイズが連動」して見えるため、
+	// オーバーレイの表示/非表示とは独立に扱う。
 }
 
 void DcompRenderer::AdjustBrightness(float delta)
@@ -887,63 +888,85 @@ void DcompRenderer::UpdateWindowBounds(
 	const int maxW = static_cast<int>(screenW * 0.95f);
 	const int maxH = static_cast<int>(screenH * 0.95f);
 
+	// ウインドウサイズ変更でモデルの見かけサイズ（ピクセル）が変わらないように、
+	// 「ピクセル単位の焦点距離」を一定に保つ（=ウインドウサイズに応じてFOVが変化する）。
+	// tan(fov/2) = H / K を満たすように fov を決めると、
+	// ピクセル焦点距離 fy = H / (2*tan(fov/2)) = K/2 が一定になり、
+	// ウインドウリサイズでモデルの見かけサイズが変わらなくなります。
 	const float refFov = XMConvertToRadians(30.0f);
 	const float K = 600.0f / std::tan(refFov * 0.5f);
+	const float focalPx = K * 0.5f;
 
-	XMFLOAT3 corners[8] = {
+	// 1) bboxの8頂点を view space へ変換し、x/z と y/z の範囲を取る
+	const DirectX::XMFLOAT3 corners[8] = {
 		{ minx, miny, minz }, { maxx, miny, minz },
 		{ minx, maxy, minz }, { maxx, maxy, minz },
 		{ minx, miny, maxz }, { maxx, miny, maxz },
 		{ minx, maxy, maxz }, { maxx, maxy, maxz }
 	};
 
-	float minU = std::numeric_limits<float>::max();
-	float maxU = std::numeric_limits<float>::lowest();
-	float minV = std::numeric_limits<float>::max();
-	float maxV = std::numeric_limits<float>::lowest();
+	float minRx = std::numeric_limits<float>::max();
+	float maxRx = std::numeric_limits<float>::lowest();
+	float minRy = std::numeric_limits<float>::max();
+	float maxRy = std::numeric_limits<float>::lowest();
 
-	XMMATRIX MV = model * view;
+	const XMMATRIX MV = model * view;
 
 	for (const auto& c : corners)
 	{
-		XMVECTOR vWorld = XMVector3TransformCoord(XMLoadFloat3(&c), MV);
-		float z = XMVectorGetZ(vWorld);
+		XMVECTOR vView = XMVector3TransformCoord(XMLoadFloat3(&c), MV);
+
+		float z = XMVectorGetZ(vView);
 		if (z < 0.1f) z = 0.1f;
 
-		float x = XMVectorGetX(vWorld);
-		float y = XMVectorGetY(vWorld);
+		const float rx = XMVectorGetX(vView) / z;
+		const float ry = XMVectorGetY(vView) / z;
 
-		float u = x * K / (2.0f * z);
-		float v = y * K / (2.0f * z);
-
-		minU = std::min(minU, u);
-		maxU = std::max(maxU, u);
-		minV = std::min(minV, v);
-		maxV = std::max(maxV, v);
+		minRx = std::min(minRx, rx);
+		maxRx = std::max(maxRx, rx);
+		minRy = std::min(minRy, ry);
+		maxRy = std::max(maxRy, ry);
 	}
 
-	if (minU >= maxU || minV >= maxV)
+	if (minRx >= maxRx || minRy >= maxRy)
 	{
 		m_hasContentRect = false;
 		return;
 	}
 
-	float contentWidth = maxU - minU;
-	float contentHeight = maxV - minV;
-
-	constexpr float margin = 40.0f;
-	constexpr float minWindowSize = 64.0f;
+	constexpr float marginPx = 40.0f;
+	constexpr float minClientSize = 64.0f;
 
 	auto quantize = [](float val) {
 		const float step = 64.0f;
 		return std::ceil(val / step) * step;
 		};
 
-	float targetWidth = quantize(contentWidth + margin * 2.0f);
-	float targetHeight = quantize(contentHeight + margin * 2.0f);
+	// 2) ピクセル焦点距離(focalPx)で画面ピクセル上のAABB（中心基準）を求める
+	const float minU = minRx * focalPx;
+	const float maxU = maxRx * focalPx;
+	const float minV = minRy * focalPx;
+	const float maxV = maxRy * focalPx;
 
-	targetWidth = std::clamp(targetWidth, minWindowSize, (float)maxW);
-	targetHeight = std::clamp(targetHeight, minWindowSize, (float)maxH);
+	// 3) オートフィット用の必要クライアントサイズ（ピクセル）はそのまま求まる
+	float desiredClientW = (maxU - minU) + marginPx * 2.0f;
+	float desiredClientH = (maxV - minV) + marginPx * 2.0f;
+	desiredClientW = quantize(desiredClientW);
+	desiredClientH = quantize(desiredClientH);
+	desiredClientW = std::clamp(desiredClientW, minClientSize, (float)maxW);
+	desiredClientH = std::clamp(desiredClientH, minClientSize, (float)maxH);
+
+	// クライアントサイズ -> ウインドウサイズに変換
+	RECT rc = { 0, 0, (LONG)desiredClientW, (LONG)desiredClientH };
+	const DWORD style = (DWORD)GetWindowLongPtrW(m_hwnd, GWL_STYLE);
+	const DWORD exStyle = (DWORD)GetWindowLongPtrW(m_hwnd, GWL_EXSTYLE);
+	AdjustWindowRectEx(&rc, style, FALSE, exStyle);
+
+	int desiredW = rc.right - rc.left;
+	int desiredH = rc.bottom - rc.top;
+
+	desiredW = std::clamp(desiredW, (int)minClientSize, maxW);
+	desiredH = std::clamp(desiredH, (int)minClientSize, maxH);
 
 	RECT wnd{};
 	GetWindowRect(m_hwnd, &wnd);
@@ -953,6 +976,7 @@ void DcompRenderer::UpdateWindowBounds(
 #if DCOMP_AUTOFIT_WINDOW
 	static int reservedW = 0;
 	static int reservedH = 0;
+
 	static uint64_t frameCounter = 0;
 	static uint64_t lastResizeFrame = 0;
 	++frameCounter;
@@ -962,47 +986,40 @@ void DcompRenderer::UpdateWindowBounds(
 		if (reservedW == 0) reservedW = curWidth;
 		if (reservedH == 0) reservedH = curHeight;
 
-		int desiredW = static_cast<int>(targetWidth);
-		int desiredH = static_cast<int>(targetHeight);
-
 #if DCOMP_AUTOFIT_GROW_ONLY
 		desiredW = std::max(desiredW, reservedW);
 		desiredH = std::max(desiredH, reservedH);
 #endif
 
-		const bool needResize = (desiredW != curWidth) || (desiredH != curHeight);
-		const bool inCooldown = (frameCounter - lastResizeFrame) <= DCOMP_AUTOFIT_COOLDOWN_FRAMES;
+		const bool sizeChanged = (std::abs(curWidth - desiredW) >= 32) || (std::abs(curHeight - desiredH) >= 32);
+		const bool cooldownOk = (frameCounter - lastResizeFrame) >= DCOMP_AUTOFIT_COOLDOWN_FRAMES;
 
-		if (needResize && !inCooldown)
+		if (sizeChanged && cooldownOk)
 		{
+			SetWindowPos(m_hwnd, nullptr, 0, 0, desiredW, desiredH, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+			lastResizeFrame = frameCounter;
+
 #if DCOMP_AUTOFIT_GROW_ONLY
-			desiredW = std::max(desiredW, curWidth);
-			desiredH = std::max(desiredH, curHeight);
+			reservedW = std::max(reservedW, desiredW);
+			reservedH = std::max(reservedH, desiredH);
 #endif
-
-			if (desiredW != curWidth || desiredH != curHeight)
-			{
-				int centerX = wnd.left + curWidth / 2;
-				int centerY = wnd.top + curHeight / 2;
-				int targetLeft = centerX - desiredW / 2;
-				int targetTop = centerY - desiredH / 2;
-
-				SetWindowPos(m_hwnd, nullptr, targetLeft, targetTop, desiredW, desiredH,
-							 SWP_NOZORDER | SWP_NOACTIVATE);
-
-				lastResizeFrame = frameCounter;
-				reservedW = std::max(reservedW, desiredW);
-				reservedH = std::max(reservedH, desiredH);
-			}
 		}
 	}
 #endif
 
+	// 4) 現在のクライアントサイズでコンテンツ矩形を計算して保持
 	UINT clientW = 0, clientH = 0;
 	GetClientSize(m_hwnd, clientW, clientH);
+	if (clientW == 0 || clientH == 0)
+	{
+		m_hasContentRect = false;
+		return;
+	}
 
-	float centerX = clientW * 0.5f;
-	float centerY = clientH * 0.5f;
+	// minU/maxU/minV/maxV は上で focalPx を用いてピクセル単位で計算済み
+
+	const float centerX = clientW * 0.5f;
+	const float centerY = clientH * 0.5f;
 
 	m_lastContentRect.left = static_cast<LONG>(centerX + minU);
 	m_lastContentRect.right = static_cast<LONG>(centerX + maxU);
@@ -1011,8 +1028,6 @@ void DcompRenderer::UpdateWindowBounds(
 
 	m_hasContentRect = true;
 }
-
-// DcompRenderer.cpp の Render をこれに置き換え
 
 void DcompRenderer::Render(const MmdAnimator& animator)
 {
@@ -1026,28 +1041,19 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 		return;
 	}
 
+	// 1. バウンディングボックスの取得
 	float minx, miny, minz, maxx, maxy, maxz;
 	animator.GetBounds(minx, miny, minz, maxx, maxy, maxz);
 
-	// 足元スナップ用：余白(margin)を入れると底がズレるので、GetBounds() の生値を保持。
-	const float minxSnap = minx;
-	const float minySnap = miny;
-	const float minzSnap = minz;
-	const float maxxSnap = maxx;
-	const float maxySnap = maxy;
-	const float maxzSnap = maxz;
+	// 足元スナップ計算用に、余白を含まない純粋な下端(Y)を保持しておく
+	const float rawMinY = miny;
 
-	// まずリサイズを反映
-	ResizeIfNeeded();
-	if (!m_intermediateTex || !m_intermediateRtvHeap || !m_intermediateSrvHeap)
-	{
-		CreateIntermediateResources();
-	}
-
+	// 自動リサイズ等の計算用に余白(margin)を含めた値を計算
 	const float margin = 3.0f;
 	minx -= margin; miny -= margin; minz -= margin;
 	maxx += margin; maxy += margin; maxz += margin;
 
+	// マージン込みの中心とサイズ
 	const float cx = (minx + maxx) * 0.5f;
 	const float cy = (miny + maxy) * 0.5f;
 	const float cz = (minz + maxz) * 0.5f;
@@ -1056,11 +1062,18 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	const float sz = (maxz - minz);
 	const float size = std::max({ sx, sy, sz, 1.0f });
 
+	// まずリサイズを反映
+	ResizeIfNeeded();
+	if (!m_intermediateTex || !m_intermediateRtvHeap || !m_intermediateSrvHeap)
+	{
+		CreateIntermediateResources();
+	}
+
 	using namespace DirectX;
 	const float scale = (1.0f / size) * m_lightSettings.modelScale;
 	const XMMATRIX motionTransform = DirectX::XMLoadFloat4x4(&animator.MotionTransform());
 
-	// カメラはモデル中心（モーション移動込み）に追従し、距離は一定
+	// モデルトラッキング行列: 中心を原点に移動し、スケール、モーションを適用
 	const XMMATRIX M_track =
 		XMMatrixTranslation(-cx, -cy, -cz) *
 		XMMatrixScaling(scale, scale, scale) *
@@ -1085,73 +1098,51 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 
 	// カメラ上方向（ワールド）を取得
 	XMMATRIX invV = XMMatrixInverse(nullptr, V);
-	XMVECTOR upWorld = XMVector3Normalize(invV.r[1]);
+	// View空間の(0,1,0)をワールドへ変換して、移動方向を厳密に一致させる（Yawでの微小な上下ズレ対策）
+	XMVECTOR upWorld = XMVector3Normalize(XMVector3TransformNormal(XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f), invV));
 
+	// ウインドウサイズとモデルの見かけサイズ（ピクセル）を独立にするため、
+	// ピクセル単位の焦点距離を一定に保つ（=ウインドウサイズに応じてFOVが変化する）。
 	const float refFov = XMConvertToRadians(30.0f);
-	const float K = 600.0f / std::tan(refFov * 0.5f);
+	const float K = 600.0f / std::tan(refFov * 0.5f); // tan(fov/2)=H/K
+	const float h = (m_height > 0) ? (float)m_height : 600.0f;
+	const float tanHalfFov = h / K;
+	float fovY = 2.0f * std::atan(tanHalfFov);
+	fovY = std::clamp(fovY, XMConvertToRadians(10.0f), XMConvertToRadians(100.0f));
 
 	const float aspect = (m_height > 0) ? (float)m_width / (float)m_height : 1.0f;
-	float fovY = 2.0f * std::atan((m_height > 0) ? ((float)m_height / K) : std::tan(refFov * 0.5f));
-	fovY = std::clamp(fovY, XMConvertToRadians(10.0f), XMConvertToRadians(100.0f));
 	XMMATRIX P = XMMatrixPerspectiveFovLH(fovY, aspect, 0.1f, 100.0f);
 
-	// ---- 足元スナップ（常に底辺に接地させる） ----
 	float snapT = 0.0f;
 	{
-		UINT clientW = 0, clientH = 0;
-		GetClientSize(m_hwnd, clientW, clientH);
+		float footOffsetY = (rawMinY - cy) * scale;
+		// Track空間での足位置。X, Zは0（中心）とする。
+		XMVECTOR footPosTrack = XMVectorSet(0.0f, footOffsetY, 0.0f, 1.0f);
 
-		if (clientW > 0 && clientH > 0)
-		{
-			const float centerY = (float)clientH * 0.5f;
-			const float desiredBottomY = (float)clientH - 2.0f;
+		// ユーザーの移動操作 (m_modelOffset) を加算
+		footPosTrack = XMVectorAdd(footPosTrack, XMVectorSet(m_modelOffset.x, m_modelOffset.y, 0.0f, 0.0f));
 
-			XMFLOAT3 corners[8] = {
-				{ minxSnap, minySnap, minzSnap }, { maxxSnap, minySnap, minzSnap },
-				{ minxSnap, maxySnap, minzSnap }, { maxxSnap, maxySnap, minzSnap },
-				{ minxSnap, minySnap, maxzSnap }, { maxxSnap, minySnap, maxzSnap },
-				{ minxSnap, maxySnap, maxzSnap }, { maxxSnap, maxySnap, maxzSnap }
-			};
+		// View行列を掛けて、カメラから見た足の位置(View Space)を計算
+		XMVECTOR footPosView = XMVector3TransformCoord(footPosTrack, V);
 
-			auto CalcBottomYPixels = [&](float t) -> float
-				{
-					const XMMATRIX M_snap =
-						M_track * XMMatrixTranslationFromVector(XMVectorScale(upWorld, t));
+		float currentY = XMVectorGetY(footPosView);
+		float currentZ = XMVectorGetZ(footPosView);
 
-					const XMMATRIX MV = M_snap * V;
+		/*
+			画面下端に足を合わせるが、モデルサイズやポスト処理などで見切れやすいので、
+			下側に一定のピクセルマージンを確保する。
+			(ウインドウリサイズで見かけサイズを保つ設計のため、px基準のマージンが扱いやすい)
+		*/
+		const float bottomMarginPx = std::clamp(h * 0.10f, 16.0f, 128.0f);
+		// y_ndc = -1 + 2*margin/h を満たす targetY を求める。
+		// tanHalfFov = h/K なので、targetY = -z*tanHalfFov + z*(2*marginPx/K)
+		float targetY = -currentZ * tanHalfFov + currentZ * (2.0f * bottomMarginPx / K);
 
-					float minV = std::numeric_limits<float>::max();
-					for (const auto& c : corners)
-					{
-						XMVECTOR vView = XMVector3TransformCoord(XMLoadFloat3(&c), MV);
-						float z = XMVectorGetZ(vView);
-						if (z < 0.1f) z = 0.1f;
-						float y = XMVectorGetY(vView);
-						float v = y * K / (2.0f * z);
-						minV = std::min(minV, v);
-					}
-					return centerY - minV;
-				};
-
-			for (int it = 0; it < 2; ++it)
-			{
-				const float y0 = CalcBottomYPixels(snapT);
-				const float err = desiredBottomY - y0;
-				if (std::fabs(err) < 0.25f) break;
-
-				const float eps = 0.01f;
-				const float yp = CalcBottomYPixels(snapT + eps);
-				const float ym = CalcBottomYPixels(snapT - eps);
-				const float deriv = (yp - ym) / (2.0f * eps);
-				if (std::fabs(deriv) < 1e-4f) break;
-
-				snapT += err / deriv;
-				snapT = std::clamp(snapT, -50.0f, 50.0f);
-			}
-		}
+		snapT = targetY - currentY;
 	}
 
 	// レンダリング用モデル行列
+	// snapT はカメラの上方向(upWorld)に沿って移動させることで、View空間でのY移動を実現する
 	XMMATRIX M =
 		M_track *
 		XMMatrixTranslationFromVector(XMVectorScale(upWorld, snapT)) *
@@ -1181,9 +1172,7 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	// -------------------------------------------------------------
 
 	// マテリアル設定（影の濃さなど）を再適用
-	// ※ UpdatePmxMorphs でマテリアル色が変わった後に呼ぶことで、設定値(ShadowMulなど)を維持する
 	UpdateMaterialSettings();
-
 
 	m_alloc[frameIndex]->Reset();
 	m_cmdList->Reset(m_alloc[frameIndex].Get(), nullptr);
@@ -1311,9 +1300,6 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 		trans.reserve(m_pmx.materials.size());
 		for (size_t i = 0; i < m_pmx.materials.size(); ++i)
 		{
-			// モーフで透過度が変わる可能性があるため、現在のdiffuse[3]をチェックするのが正しいが、
-			// m_pmx.materials[i].mat は初期値なので、厳密には CB を見に行く必要がある。
-			// ここでは簡易的に初期値で判定する（多くのモデルで半透明/不透明の属性は静的であるため）。
 			if (m_pmx.materials[i].mat.diffuse[3] < 0.999f) trans.push_back(i);
 			else opaque.push_back(i);
 		}
@@ -1347,12 +1333,6 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 
 		for (size_t i = 0; i < m_pmx.materials.size(); ++i)
 		{
-			// 現在のエッジサイズ（モーフ適用後）を確認すべきだが、ここも簡易的に初期値または
-			// MaterialCB の値を参照する形にするのが望ましい。
-			// MaterialCB の edgeSize を読むにはGPU書き込み後でCPU参照が難しいため、
-			// 厳密にはCBをCPU側でミラーリングする必要がある。
-			// 今回の UpdatePmxMorphs では mappedポインタ に書いているので読み取り可能。
-
 			const auto& gm = m_pmx.materials[i];
 			const MaterialCB* cb = reinterpret_cast<const MaterialCB*>(m_materialCbMapped + i * m_materialCbStride);
 

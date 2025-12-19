@@ -222,6 +222,8 @@ App::App(HINSTANCE hInst) : m_hInst(hInst)
 
 App::~App()
 {
+	SaveSettings();
+
 	if (m_trayMenu) DestroyMenu(m_trayMenu);
 	if (m_msgWnd) KillTimer(m_msgWnd, kTimerId);
 	if (m_renderWnd) UnregisterHotKey(m_renderWnd, kHotKeyToggleGizmoId);
@@ -537,11 +539,20 @@ void App::CreateRenderWindow()
 
 	int w = 400;
 	int h = 600;
+
+	if (m_settingsData.windowWidth > 0 && m_settingsData.windowHeight > 0)
+	{
+		w = m_settingsData.windowWidth;
+		h = m_settingsData.windowHeight;
+	}
+	else
+	{
 #if !DCOMP_AUTOFIT_WINDOW
-	// 自動フィット無効時は、初期サイズが小さすぎないようにする
-	w = std::clamp(screenW / 3, 480, 720);
-	h = std::clamp((screenH * 2) / 3, 720, 1200);
+		w = std::clamp(screenW / 3, 480, 720);
+		h = std::clamp((screenH * 2) / 3, 720, 1200);
 #endif
+	}
+
 	const int x = screenW - w - 50;
 	const int y = screenH - h - 100;
 
@@ -1098,7 +1109,24 @@ void App::ApplySettings(const AppSettings& settings, bool persist)
 
 	if (persist)
 	{
-		SettingsManager::Save(m_baseDir, m_settingsData);
+		if (!m_settingsData.modelPath.empty())
+		{
+			bool shouldSavePreset = SettingsManager::HasPreset(m_baseDir, m_settingsData.modelPath);
+			const std::wstring filename = m_settingsData.modelPath.filename().wstring();
+			auto it = m_settingsData.perModelPresetSettings.find(filename);
+			const PresetMode mode = (it != m_settingsData.perModelPresetSettings.end())
+				? it->second
+				: m_settingsData.globalPresetMode;
+			if (mode == PresetMode::AlwaysLoad)
+			{
+				shouldSavePreset = true;
+			}
+
+			if (shouldSavePreset)
+			{
+				SettingsManager::SavePreset(m_baseDir, m_settingsData.modelPath, m_settingsData.light);
+			}
+		}
 	}
 }
 
@@ -1110,9 +1138,48 @@ void App::ApplyLightSettings()
 	}
 }
 
-void App::SaveSettings() const
+void App::SaveSettings()
 {
+	if (m_renderWnd && IsWindow(m_renderWnd))
+	{
+		RECT rc{};
+		if (GetClientRect(m_renderWnd, &rc))
+		{
+			const int cw = rc.right - rc.left;
+			const int ch = rc.bottom - rc.top;
+			if (cw > 0 && ch > 0)
+			{
+				m_settingsData.windowWidth = cw;
+				m_settingsData.windowHeight = ch;
+			}
+		}
+	}
+
+	if (m_renderer)
+	{
+		m_settingsData.light = m_renderer->GetLightSettings();
+	}
+
 	SettingsManager::Save(m_baseDir, m_settingsData);
+
+	if (!m_settingsData.modelPath.empty())
+	{
+		bool shouldSavePreset = SettingsManager::HasPreset(m_baseDir, m_settingsData.modelPath);
+		const std::wstring filename = m_settingsData.modelPath.filename().wstring();
+		auto it = m_settingsData.perModelPresetSettings.find(filename);
+		const PresetMode mode = (it != m_settingsData.perModelPresetSettings.end())
+			? it->second
+			: m_settingsData.globalPresetMode;
+		if (mode == PresetMode::AlwaysLoad)
+		{
+			shouldSavePreset = true;
+		}
+
+		if (shouldSavePreset)
+		{
+			SettingsManager::SavePreset(m_baseDir, m_settingsData.modelPath, m_settingsData.light);
+		}
+	}
 }
 
 void App::OnTrayCommand(UINT id)
@@ -1170,7 +1237,14 @@ void App::OnTrayCommand(UINT id)
 			break;
 
 		case CMD_EXIT:
-			PostQuitMessage(0);
+			if (m_renderWnd)
+			{
+				PostMessageW(m_renderWnd, WM_CLOSE, 0, 0);
+			}
+			else
+			{
+				PostQuitMessage(0);
+			}
 			break;
 
 		default:
@@ -1195,22 +1269,22 @@ void App::OnMouseWheel(HWND hWnd, int delta, WPARAM)
 
 	if (ctrl && shift)
 	{
-		// Ctrl + Shift + ホイール: スケール調整
 		float adjustment = (delta > 0) ? 0.1f : -0.1f;
 		if (m_renderer)
 		{
 			m_renderer->AdjustScale(adjustment);
 			m_settingsData.light = m_renderer->GetLightSettings();
+			SaveSettings();
 		}
 	}
 	else if (ctrl)
 	{
-		// Ctrl + ホイール: 明るさ調整
 		float adjustment = (delta > 0) ? 0.1f : -0.1f;
 		if (m_renderer)
 		{
 			m_renderer->AdjustBrightness(adjustment);
 			m_settingsData.light = m_renderer->GetLightSettings();
+			SaveSettings();
 		}
 	}
 	else
@@ -1389,10 +1463,6 @@ LRESULT App::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 					}
 				}
 
-				// RenderGizmo内でUpdateLayeredWindowを呼ぶので、InvalidateRectでWM_PAINTを飛ばさなくても
-				// 直接RenderGizmoを呼べば更新できますが、一貫性のためWM_PAINT経由か
-				// 負荷を考えてRenderGizmoを直接呼ぶことも可能です。
-				// ここではシンプルに再描画要求を出します。
 				RenderGizmo();
 				return 0;
 			}
@@ -1452,8 +1522,58 @@ LRESULT App::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 			if (wParam == kTimerId) OnTimer();
 			return 0;
 
+		case WM_SIZE:
+			if (hWnd == m_renderWnd)
+			{
+				if (wParam != SIZE_MINIMIZED)
+				{
+					const int cw = LOWORD(lParam);
+					const int ch = HIWORD(lParam);
+					if (cw > 0 && ch > 0)
+					{
+						m_settingsData.windowWidth = cw;
+						m_settingsData.windowHeight = ch;
+					}
+					if (m_gizmoVisible && m_gizmoWnd)
+					{
+						PositionGizmoWindow();
+					}
+				}
+			}
+			break;
+
+		case WM_EXITSIZEMOVE:
+			// リサイズ確定タイミングで即保存
+			if (hWnd == m_renderWnd)
+			{
+				SaveSettings();
+				return 0;
+			}
+			break;
+
+		case WM_CLOSE:
+			if (hWnd == m_renderWnd)
+			{
+				// 主ウィンドウ終了時はギズモも閉じる
+				if (m_gizmoWnd && IsWindow(m_gizmoWnd))
+				{
+					DestroyWindow(m_gizmoWnd);
+					m_gizmoWnd = nullptr;
+					m_gizmoVisible = false;
+				}
+				DestroyWindow(hWnd);
+				return 0;
+			}
+			break;
+
 		case WM_DESTROY:
-			PostQuitMessage(0);
+			if (hWnd == m_renderWnd)
+			{
+				SaveSettings();
+				m_renderWnd = nullptr;
+				PostQuitMessage(0);
+				return 0;
+			}
 			return 0;
 
 		case WM_CANCELMODE:
@@ -1466,6 +1586,17 @@ LRESULT App::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 				ReleaseCapture();
 			}
 			break;
+
+		case WM_QUERYENDSESSION:
+			return TRUE;
+
+		case WM_ENDSESSION:
+			if (wParam && hWnd == m_renderWnd)
+			{
+				SaveSettings();
+			}
+			return 0;
+
 
 		default:
 			break;

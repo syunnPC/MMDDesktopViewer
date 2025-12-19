@@ -39,7 +39,7 @@ public:
 		return m_settingsData.light;
 	}
 	void ApplyLightSettings();
-	void SaveSettings() const;
+	void SaveSettings();
 
 	const std::filesystem::path& ModelsDir() const
 	{

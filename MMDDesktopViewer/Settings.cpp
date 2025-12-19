@@ -192,6 +192,14 @@ AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
 		{
 			settings.unlimitedFps = (value == L"1" || value == L"true" || value == L"True");
 		}
+		else if (key == L"windowWidth")
+		{
+			settings.windowWidth = ParseInt(value, 0);
+		}
+		else if (key == L"windowHeight")
+		{
+			settings.windowHeight = ParseInt(value, 0);
+		}
 		else if (key == L"globalPresetMode")
 		{
 			settings.globalPresetMode = static_cast<PresetMode>(ParseInt(value, 0));
@@ -232,6 +240,8 @@ void SettingsManager::Save(const std::filesystem::path& baseDir,
 	fout << L"alwaysOnTop=" << (settings.alwaysOnTop ? L"1" : L"0") << L"\n";
 	fout << L"targetFps=" << IntToWString(settings.targetFps) << L"\n";
 	fout << L"unlimitedFps=" << (settings.unlimitedFps ? L"1" : L"0") << L"\n";
+	fout << L"windowWidth=" << IntToWString(settings.windowWidth) << L"\n";
+	fout << L"windowHeight=" << IntToWString(settings.windowHeight) << L"\n";
 	fout << L"globalPresetMode=" << IntToWString(static_cast<int>(settings.globalPresetMode)) << L"\n";
 
 	for (const auto& [name, mode] : settings.perModelPresetSettings)

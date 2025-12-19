@@ -64,9 +64,13 @@ struct AppSettings
 	int targetFps{ 60 };
 	bool unlimitedFps{ false };
 
+	// 追加: ウィンドウサイズ
+	int windowWidth{ 0 };
+	int windowHeight{ 0 };
+
 	// プリセット関連設定
 	PresetMode globalPresetMode{ PresetMode::Ask };
-	std::map<std::wstring, PresetMode> perModelPresetSettings; 
+	std::map<std::wstring, PresetMode> perModelPresetSettings;
 
 	LightSettings light;
 };
