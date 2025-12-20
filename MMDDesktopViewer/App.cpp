@@ -464,7 +464,10 @@ void App::OnTimer()
 		float dx = (float)pt.x - headPosScreen.x;
 		float dy = (float)pt.y - headPosScreen.y;
 
-		// --- ロール（横倒し）対応：頭(首/目)の向きに合わせて dx/dy を補正 ---
+		// --- ロール（横倒し）補正 ---
+		// 以前の「右/上の2D基底を逆行列で解く」方式は、基底が直交しない(特に横を向いた時)と
+		// dx(左右)がdy(上下)に混入し、カーソルを左右に離しただけで顔が上を向く現象が出やすい。
+		// ここでは「首→頭」のスクリーン上の向きからロール角だけを推定し、2D回転で補正する。
 		auto IsZero3 = [](const DirectX::XMFLOAT3& v) {
 			const float eps = 1e-6f;
 			return (std::abs(v.x) < eps && std::abs(v.y) < eps && std::abs(v.z) < eps);
@@ -484,25 +487,6 @@ void App::OnTimer()
 			return DirectX::XMFLOAT3{ p.x + dir.x * s, p.y + dir.y * s, p.z + dir.z * s };
 			};
 
-		DirectX::XMFLOAT3 right3{ 0,0,0 };
-		DirectX::XMFLOAT3 up3{ 0,0,0 };
-		float basisScale = 1.0f;
-
-		// 右方向：左右目から推定
-		auto eyeL = m_animator->GetBoneGlobalPosition(L"左目");
-		auto eyeR = m_animator->GetBoneGlobalPosition(L"右目");
-		if (!IsZero3(eyeL) && !IsZero3(eyeR))
-		{
-			auto v = Sub3(eyeR, eyeL);
-			float d = Len3(v);
-			if (d > 1e-3f)
-			{
-				right3 = Normalize3(v);
-				basisScale = std::max(basisScale, d * 0.5f);
-			}
-		}
-
-		// 上方向：首→頭から推定
 		auto neck = m_animator->GetBoneGlobalPosition(L"首");
 		if (!IsZero3(neck) && !IsZero3(headPos3D))
 		{
@@ -510,34 +494,38 @@ void App::OnTimer()
 			float d = Len3(v);
 			if (d > 1e-3f)
 			{
-				up3 = Normalize3(v);
-				basisScale = std::max(basisScale, d * 0.5f);
-			}
-		}
+				DirectX::XMFLOAT3 up3 = Normalize3(v);
+				float basisScale = std::max(1.0f, d * 0.5f);
 
-		// right/up 両方そろっている場合だけ補正
-		if (!IsZero3(right3) && !IsZero3(up3))
-		{
-			auto pR = m_renderer->ProjectToScreen(AddScaled3(headPos3D, right3, basisScale));
-			auto pU = m_renderer->ProjectToScreen(AddScaled3(headPos3D, up3, basisScale));
-
-			float vRx = pR.x - headPosScreen.x;
-			float vRy = pR.y - headPosScreen.y;
-			float vUx = pU.x - headPosScreen.x;
-			float vUy = pU.y - headPosScreen.y;
-
-			float det = vRx * vUy - vRy * vUx;
-			if (std::abs(det) > 1e-3f)
-			{
-				// delta = a*vR + b*vU
-				float a = (dx * vUy - dy * vUx) / det;
-				float b = (vRx * dy - vRy * dx) / det;
-
-				float lenR = std::sqrt(vRx * vRx + vRy * vRy);
+				auto pU = m_renderer->ProjectToScreen(AddScaled3(headPos3D, up3, basisScale));
+				float vUx = pU.x - headPosScreen.x;
+				float vUy = pU.y - headPosScreen.y;
 				float lenU = std::sqrt(vUx * vUx + vUy * vUy);
+				if (lenU > 1e-3f)
+				{
+					// スクリーン座標は +Y が下。モデルの「上方向」(首→頭)がスクリーンの上(-Y)を向くとき roll=0。
+					// vU の向きが傾いている分だけ、delta(dx,dy) を逆回転してロールを打ち消す。
+					float ux = vUx / lenU;
+					float uy = vUy / lenU;
 
-				if (lenR > 1e-3f) dx = a * lenR;
-				if (lenU > 1e-3f) dy = b * lenU;
+					// 方向の二義性対策:
+					// 「首→頭」の軸は、スクリーン上では (ux,uy) と (-ux,-uy) のどちらでも同じ軸を表す。
+					// ここで vU が下(+Y)を向いていると θ が π ずれて (dx,dy) が両方反転しやすいので、
+					// 必ず「上(0,-1)」側に揃える。
+					if (uy > 0.0f)
+					{
+						ux = -ux;
+						uy = -uy;
+					}
+					float theta = std::atan2(ux, -uy); // vU を (0,-1) に合わせる角
+
+					float c = std::cos(theta);
+					float s = std::sin(theta);
+					float ndx = c * dx + s * dy;
+					float ndy = -s * dx + c * dy;
+					dx = ndx;
+					dy = ndy;
+				}
 			}
 		}
 		// -------------------------------------------------------------------

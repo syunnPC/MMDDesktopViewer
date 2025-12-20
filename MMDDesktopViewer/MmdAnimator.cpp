@@ -392,12 +392,13 @@ void MmdAnimator::Tick(double dtSeconds)
 		float neckPitch, eyePitch;
 		ComputeBoneAngles(m_lookAtPitch, currentDeadZonePitch, currentMaxNeckPitch, maxEyePitch, pitchNeckGain, neckPitch, eyePitch);
 
-		// 追従方向（上下左右）が反転している場合の符号補正
-		// App側の yaw/pitch の取り方はそのままに、ボーンへ適用する回転だけ反転する。
-		neckYaw = -neckYaw;
-		eyeYaw = -eyeYaw;
-		neckPitch = -neckPitch;
-		eyePitch = -eyePitch;
+
+		// 追従方向（上下左右）が反転している場合の符号補正（必要なモデルでのみ有効化）
+		// ※現在は App 側の yaw/pitch とボーン適用の向きが一致している想定のため無効化。
+		// neckYaw = -neckYaw;
+		// eyeYaw = -eyeYaw;
+		// neckPitch = -neckPitch;
+		// eyePitch = -eyePitch;
 
 		// 首と頭で負担を分ける（首は控えめ・頭を多め）
 		// 縦方向は特に「顔ごと」追従させたいので、頭の寄与を大きくする。
