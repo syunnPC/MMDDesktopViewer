@@ -3,6 +3,7 @@
 #include "MmdPhysicsWorld.hpp"
 #include <stdexcept>
 #include <algorithm>
+#include <cmath>
 #include <DirectXMath.h>
 
 namespace
@@ -342,46 +343,71 @@ void MmdAnimator::Tick(double dtSeconds)
 		using namespace DirectX;
 
 		// 基本設定値 (ラジアン)
-		const float baseDeadZone = XMConvertToRadians(15.0f);   // 通常のデッドゾーン
-		const float deadZoneUp = XMConvertToRadians(5.0f);     // 上向き時のデッドゾーン（狭める＝すぐ首が動く）
+// 横(yaw)と縦(pitch)で「目だけで追う幅」と「目の可動範囲」を分ける。
+// 縦方向は目だけで追う幅を狭め、早めに首/頭が動くようにする。
+		const float deadZoneYaw = XMConvertToRadians(15.0f);          // 横のデッドゾーン
+		const float deadZonePitchUp = XMConvertToRadians(3.0f);       // 上向きのデッドゾーン（小さいほど早く顔が動く）
+		const float deadZonePitchDown = XMConvertToRadians(6.0f);     // 下向きのデッドゾーン
 
-		const float maxNeckYaw = XMConvertToRadians(50.0f);     // 首の横回転制限
-		const float maxNeckPitchUp = XMConvertToRadians(25.0f);   // 上向き首制限 (破綻防止のため少し控えめに)
-		const float maxNeckPitchDown = XMConvertToRadians(35.0f); // 下向き首制限
-		const float maxEye = XMConvertToRadians(20.0f);         // 目の回転制限
+		const float maxNeckYaw = XMConvertToRadians(50.0f);           // 首の横回転制限
+		const float maxNeckPitchUp = XMConvertToRadians(25.0f);       // 上向き首制限
+		const float maxNeckPitchDown = XMConvertToRadians(35.0f);     // 下向き首制限
+
+		const float maxEyeYaw = XMConvertToRadians(20.0f);            // 目の横回転制限
+		const float maxEyePitch = XMConvertToRadians(10.0f);          // 目の縦回転制限（狭めると顔が先に動く）
+
+		const float pitchNeckGain = 1.25f;                            // 縦方向の首/頭の寄与を増やす（1.0=従来）
 
 		// ヘルパー: 目と首の配分計算
-		auto ComputeBoneAngles = [&](float target, float deadZone, float maxNeck, float& outNeck, float& outEye)
+		auto ComputeBoneAngles = [&](float target, float deadZone, float maxNeck, float maxEyeLocal, float neckGain, float& outNeck, float& outEye)
 			{
 				if (std::abs(target) <= deadZone)
 				{
 					outNeck = 0.0f;
-					outEye = target;
+					outEye = std::clamp(target, -maxEyeLocal, maxEyeLocal);
 				}
 				else
 				{
 					float sign = (target >= 0.0f) ? 1.0f : -1.0f;
 					float excess = target - (sign * deadZone);
-					float neck = std::clamp(excess, -maxNeck, maxNeck);
+
+					// neckGain を上げるほど、早めに首/頭が動く
+					float neck = std::clamp(excess * neckGain, -maxNeck, maxNeck);
 					outNeck = neck;
-					outEye = std::clamp(target - neck, -maxEye, maxEye);
+
+					// 目は残差だけ担当（ただし可動範囲でクランプ）
+					outEye = std::clamp(target - neck, -maxEyeLocal, maxEyeLocal);
 				}
 			};
 
 		float neckYaw, eyeYaw;
-		ComputeBoneAngles(m_lookAtYaw, baseDeadZone, maxNeckYaw, neckYaw, eyeYaw);
+		ComputeBoneAngles(m_lookAtYaw, deadZoneYaw, maxNeckYaw, maxEyeYaw, 1.0f, neckYaw, eyeYaw);
 
 		// 上向き判定 (App.cppの実装依存：pitch正が上向きと仮定)
 		bool isUpward = (m_lookAtPitch > 0.0f);
 
-		float currentDeadZone = isUpward ? deadZoneUp : baseDeadZone;
+		float currentDeadZonePitch = isUpward ? deadZonePitchUp : deadZonePitchDown;
 		float currentMaxNeckPitch = isUpward ? maxNeckPitchUp : maxNeckPitchDown;
 
 		float neckPitch, eyePitch;
-		ComputeBoneAngles(m_lookAtPitch, currentDeadZone, currentMaxNeckPitch, neckPitch, eyePitch);
+		ComputeBoneAngles(m_lookAtPitch, currentDeadZonePitch, currentMaxNeckPitch, maxEyePitch, pitchNeckGain, neckPitch, eyePitch);
 
-		// 首と頭で半分ずつ負担
-		XMVECTOR qHeadNeck = XMQuaternionRotationRollPitchYaw(neckPitch * 0.5f, neckYaw * 0.5f, 0.0f);
+		// 追従方向（上下左右）が反転している場合の符号補正
+		// App側の yaw/pitch の取り方はそのままに、ボーンへ適用する回転だけ反転する。
+		neckYaw = -neckYaw;
+		eyeYaw = -eyeYaw;
+		neckPitch = -neckPitch;
+		eyePitch = -eyePitch;
+
+		// 首と頭で負担を分ける（首は控えめ・頭を多め）
+		// 縦方向は特に「顔ごと」追従させたいので、頭の寄与を大きくする。
+		const float neckYawW = 0.45f;
+		const float headYawW = 0.55f;
+		const float neckPitchW = 0.30f;
+		const float headPitchW = 0.70f;
+
+		XMVECTOR qNeck = XMQuaternionRotationRollPitchYaw(neckPitch * neckPitchW, neckYaw * neckYawW, 0.0f);
+		XMVECTOR qHead = XMQuaternionRotationRollPitchYaw(neckPitch * headPitchW, neckYaw * headYawW, 0.0f);
 		XMVECTOR qEyes = XMQuaternionRotationRollPitchYaw(eyePitch, eyeYaw, 0.0f);
 
 		auto ApplyRot = [&](int32_t idx, XMVECTOR qOffset) {
@@ -397,8 +423,8 @@ void MmdAnimator::Tick(double dtSeconds)
 			XMStoreFloat4(&m_pose.boneRotations[name], next);
 			};
 
-		ApplyRot(m_boneIdxNeck, qHeadNeck);
-		ApplyRot(m_boneIdxHead, qHeadNeck);
+		ApplyRot(m_boneIdxNeck, qNeck);
+		ApplyRot(m_boneIdxHead, qHead);
 		ApplyRot(m_boneIdxEyeL, qEyes);
 		ApplyRot(m_boneIdxEyeR, qEyes);
 	}
@@ -516,4 +542,79 @@ DirectX::XMFLOAT3 MmdAnimator::GetBoneGlobalPosition(const std::wstring& boneNam
 		return { mat._41, mat._42, mat._43 };
 	}
 	return { 0,0,0 };
+}
+
+void MmdAnimator::SetLookAtTarget(bool enabled, const DirectX::XMFLOAT3& targetPos)
+{
+	using namespace DirectX;
+
+	m_lookAtEnabled = enabled;
+	if (!enabled)
+	{
+		m_lookAtYaw = 0.0f;
+		m_lookAtPitch = 0.0f;
+		return;
+	}
+
+	if (!m_boneSolver || !m_model) return;
+
+	// 参照ボーン（首があれば首、無ければ頭）
+	int32_t refIdx = (m_boneIdxNeck >= 0) ? m_boneIdxNeck : m_boneIdxHead;
+	if (refIdx < 0) return;
+
+	const auto& refM = m_boneSolver->GetBoneGlobalMatrix(refIdx);
+	XMVECTOR refPos = XMVectorSet(refM._41, refM._42, refM._43, 1.0f);
+
+	XMVECTOR target = XMLoadFloat3(&targetPos);
+	XMVECTOR dir = XMVectorSubtract(target, refPos);
+	float dirLenSq = XMVectorGetX(XMVector3LengthSq(dir));
+	if (dirLenSq < 1e-8f)
+	{
+		m_lookAtYaw = 0.0f; m_lookAtPitch = 0.0f; return;
+	}
+	dir = XMVector3Normalize(dir);
+
+	// ref のローカル基底（行ベクトル想定）
+	XMVECTOR right = XMVector3Normalize(XMVectorSet(refM._11, refM._12, refM._13, 0.0f));
+	XMVECTOR up = XMVector3Normalize(XMVectorSet(refM._21, refM._22, refM._23, 0.0f));
+	XMVECTOR fwd = XMVector3Normalize(XMVectorSet(refM._31, refM._32, refM._33, 0.0f));
+
+	// 「顔の正面」が -Z のモデル対策（目ボーンの位置で符号判定）
+	if (m_boneIdxEyeL >= 0 && m_boneIdxEyeR >= 0)
+	{
+		const auto& mL = m_boneSolver->GetBoneGlobalMatrix(m_boneIdxEyeL);
+		const auto& mR = m_boneSolver->GetBoneGlobalMatrix(m_boneIdxEyeR);
+
+		XMVECTOR eyeMid = XMVectorScale(
+			XMVectorAdd(
+				XMVectorSet(mL._41, mL._42, mL._43, 1.0f),
+				XMVectorSet(mR._41, mR._42, mR._43, 1.0f)
+			),
+			0.5f
+		);
+
+		XMVECTOR faceDir = XMVectorSubtract(eyeMid, refPos);
+		float faceLenSq = XMVectorGetX(XMVector3LengthSq(faceDir));
+		if (faceLenSq > 1e-8f)
+		{
+			faceDir = XMVector3Normalize(faceDir);
+			float sign = XMVectorGetX(XMVector3Dot(faceDir, fwd));
+			if (sign < 0.0f)
+			{
+				// face が -fwd 側 → bone(+Z) を -dir に向けると face(-Z) が target に向く
+				dir = XMVectorNegate(dir);
+			}
+		}
+	}
+
+	float x = XMVectorGetX(XMVector3Dot(dir, right));
+	float y = XMVectorGetX(XMVector3Dot(dir, up));
+	float z = XMVectorGetX(XMVector3Dot(dir, fwd));
+
+	float yaw = std::atan2(x, z);
+	float pitch = std::atan2(y, z);
+
+	const float limit = XMConvertToRadians(90.0f);
+	m_lookAtYaw = std::clamp(yaw, -limit, limit);
+	m_lookAtPitch = std::clamp(pitch, -limit, limit);
 }

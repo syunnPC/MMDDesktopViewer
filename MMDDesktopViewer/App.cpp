@@ -12,6 +12,7 @@
 #include <thread>
 #include <stdexcept>
 #include <string>
+#include <cmath>
 #include <windowsx.h>
 #include <dwmapi.h>
 #pragma comment(lib, "dwmapi.lib")
@@ -459,9 +460,87 @@ void App::OnTimer()
 		// 頭のスクリーン位置を取得
 		auto headPosScreen = m_renderer->ProjectToScreen(headPos3D);
 
-		// スクリーン上での偏差
+		// スクリーン上での偏差（ピクセル）
 		float dx = (float)pt.x - headPosScreen.x;
 		float dy = (float)pt.y - headPosScreen.y;
+
+		// --- ロール（横倒し）対応：頭(首/目)の向きに合わせて dx/dy を補正 ---
+		auto IsZero3 = [](const DirectX::XMFLOAT3& v) {
+			const float eps = 1e-6f;
+			return (std::abs(v.x) < eps && std::abs(v.y) < eps && std::abs(v.z) < eps);
+			};
+		auto Sub3 = [](const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b) {
+			return DirectX::XMFLOAT3{ a.x - b.x, a.y - b.y, a.z - b.z };
+			};
+		auto Len3 = [](const DirectX::XMFLOAT3& v) {
+			return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+			};
+		auto Normalize3 = [&](const DirectX::XMFLOAT3& v) {
+			float len = Len3(v);
+			if (len < 1e-6f) return DirectX::XMFLOAT3{ 0,0,0 };
+			return DirectX::XMFLOAT3{ v.x / len, v.y / len, v.z / len };
+			};
+		auto AddScaled3 = [](const DirectX::XMFLOAT3& p, const DirectX::XMFLOAT3& dir, float s) {
+			return DirectX::XMFLOAT3{ p.x + dir.x * s, p.y + dir.y * s, p.z + dir.z * s };
+			};
+
+		DirectX::XMFLOAT3 right3{ 0,0,0 };
+		DirectX::XMFLOAT3 up3{ 0,0,0 };
+		float basisScale = 1.0f;
+
+		// 右方向：左右目から推定
+		auto eyeL = m_animator->GetBoneGlobalPosition(L"左目");
+		auto eyeR = m_animator->GetBoneGlobalPosition(L"右目");
+		if (!IsZero3(eyeL) && !IsZero3(eyeR))
+		{
+			auto v = Sub3(eyeR, eyeL);
+			float d = Len3(v);
+			if (d > 1e-3f)
+			{
+				right3 = Normalize3(v);
+				basisScale = std::max(basisScale, d * 0.5f);
+			}
+		}
+
+		// 上方向：首→頭から推定
+		auto neck = m_animator->GetBoneGlobalPosition(L"首");
+		if (!IsZero3(neck) && !IsZero3(headPos3D))
+		{
+			auto v = Sub3(headPos3D, neck);
+			float d = Len3(v);
+			if (d > 1e-3f)
+			{
+				up3 = Normalize3(v);
+				basisScale = std::max(basisScale, d * 0.5f);
+			}
+		}
+
+		// right/up 両方そろっている場合だけ補正
+		if (!IsZero3(right3) && !IsZero3(up3))
+		{
+			auto pR = m_renderer->ProjectToScreen(AddScaled3(headPos3D, right3, basisScale));
+			auto pU = m_renderer->ProjectToScreen(AddScaled3(headPos3D, up3, basisScale));
+
+			float vRx = pR.x - headPosScreen.x;
+			float vRy = pR.y - headPosScreen.y;
+			float vUx = pU.x - headPosScreen.x;
+			float vUy = pU.y - headPosScreen.y;
+
+			float det = vRx * vUy - vRy * vUx;
+			if (std::abs(det) > 1e-3f)
+			{
+				// delta = a*vR + b*vU
+				float a = (dx * vUy - dy * vUx) / det;
+				float b = (vRx * dy - vRy * dx) / det;
+
+				float lenR = std::sqrt(vRx * vRx + vRy * vRy);
+				float lenU = std::sqrt(vUx * vUx + vUy * vUy);
+
+				if (lenR > 1e-3f) dx = a * lenR;
+				if (lenU > 1e-3f) dy = b * lenU;
+			}
+		}
+		// -------------------------------------------------------------------
 
 		RECT rc;
 		GetClientRect(m_renderWnd, &rc);

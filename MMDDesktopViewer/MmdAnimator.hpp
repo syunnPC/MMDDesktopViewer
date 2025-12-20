@@ -57,6 +57,7 @@ public:
 
 	// --- LookAt 機能 ---
 	void SetLookAtState(bool enabled, float yaw, float pitch);
+	void SetLookAtTarget(bool enabled, const DirectX::XMFLOAT3& targetPos);
 	DirectX::XMFLOAT3 GetBoneGlobalPosition(const std::wstring& boneName) const;
 	// ------------------
 
