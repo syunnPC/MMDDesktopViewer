@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <queue>
 
 using namespace DirectX;
 
@@ -1881,6 +1882,7 @@ void MmdPhysicsWorld::WriteBackBones(const PmxModel& model, BoneSolver& bones)
 	std::unordered_set<int> keepTranslationBones;
 	keepTranslationBones.reserve(m_bodies.size());
 
+	// Detect whether there is any "AfterPhysics" driven bone. If none exists, fall back to a safe mode.
 	bool anyAfterPhysics = false;
 	if (m_settings.requireAfterPhysicsFlag)
 	{
@@ -1895,8 +1897,8 @@ void MmdPhysicsWorld::WriteBackBones(const PmxModel& model, BoneSolver& bones)
 
 			if (!bonesDef[def.boneIndex].IsAfterPhysics()) continue;
 
-			XMVECTOR pCheck = Load3(b.position);
-			XMVECTOR qCheck = Load4(b.rotation);
+			const XMVECTOR pCheck = Load3(b.position);
+			const XMVECTOR qCheck = Load4(b.rotation);
 			if (!IsVectorFinite3(pCheck) || !IsVectorFinite4(qCheck)) continue;
 
 			anyAfterPhysics = true;
@@ -1906,91 +1908,321 @@ void MmdPhysicsWorld::WriteBackBones(const PmxModel& model, BoneSolver& bones)
 
 	const bool fallbackNoAfterPhysics = (m_settings.requireAfterPhysicsFlag && !anyAfterPhysics);
 
-	auto CollectBone = [&](size_t i) {
-		// [FIX] Added boundary check for generated bodies
-		if (i >= rbDefs.size()) return;
-
-		const auto& def = rbDefs[i];
-		if (def.operation == PmxModel::RigidBody::OperationType::Static) return;
-		if (def.boneIndex < 0 || def.boneIndex >= static_cast<int>(bonesDef.size())) return;
-
-		const Body& b = m_bodies[i];
-		if (b.invMass <= 0.0f) return;
-
-		XMVECTOR pCheck = Load3(b.position);
-		XMVECTOR qCheck = Load4(b.rotation);
-		if (!IsVectorFinite3(pCheck) || !IsVectorFinite4(qCheck)) return;
-
-		if (m_settings.requireAfterPhysicsFlag && !fallbackNoAfterPhysics)
+	auto CollectBone = [&](size_t i)
 		{
-			if (!bonesDef[def.boneIndex].IsAfterPhysics()) return;
-		}
-		else if (fallbackNoAfterPhysics && m_settings.writebackFallbackPositionAdjustOnly)
-		{
-			if (def.operation != PmxModel::RigidBody::OperationType::DynamicAndPositionAdjust) return;
-		}
+			// [FIX] Added boundary check for generated bodies
+			if (i >= rbDefs.size()) return;
 
-		if (def.operation == PmxModel::RigidBody::OperationType::DynamicAndPositionAdjust)
-		{
-			keepTranslationBones.insert(def.boneIndex);
-		}
-		XMMATRIX rbG = MatrixFromTR(b.position, b.rotation);
-		XMMATRIX localFromBone = XMLoadFloat4x4(&b.localFromBone);
-		XMMATRIX invLocalFromBone = XMMatrixInverse(nullptr, localFromBone);
-		XMMATRIX boneG = rbG * invLocalFromBone;
+			const auto& def = rbDefs[i];
+			if (def.operation == PmxModel::RigidBody::OperationType::Static) return;
+			if (def.boneIndex < 0 || def.boneIndex >= static_cast<int>(bonesDef.size())) return;
 
-		XMFLOAT4X4 g{};
-		XMStoreFloat4x4(&g, boneG);
-		desiredGlobals[def.boneIndex] = g;
+			const Body& b = m_bodies[i];
+			if (b.invMass <= 0.0f) return;
+
+			const XMVECTOR pCheck = Load3(b.position);
+			const XMVECTOR qCheck = Load4(b.rotation);
+			if (!IsVectorFinite3(pCheck) || !IsVectorFinite4(qCheck)) return;
+
+			if (m_settings.requireAfterPhysicsFlag && !fallbackNoAfterPhysics)
+			{
+				if (!bonesDef[def.boneIndex].IsAfterPhysics()) return;
+			}
+			else if (fallbackNoAfterPhysics && m_settings.writebackFallbackPositionAdjustOnly)
+			{
+				if (def.operation != PmxModel::RigidBody::OperationType::DynamicAndPositionAdjust) return;
+			}
+
+			if (def.operation == PmxModel::RigidBody::OperationType::DynamicAndPositionAdjust)
+			{
+				keepTranslationBones.insert(def.boneIndex);
+			}
+
+			const XMMATRIX rbG = MatrixFromTR(b.position, b.rotation);
+			const XMMATRIX localFromBone = XMLoadFloat4x4(&b.localFromBone);
+			const XMMATRIX invLocalFromBone = XMMatrixInverse(nullptr, localFromBone);
+			const XMMATRIX boneG = rbG * invLocalFromBone;
+
+			XMFLOAT4X4 g{};
+			XMStoreFloat4x4(&g, boneG);
+			desiredGlobals[def.boneIndex] = g;
 		};
 
 	for (size_t i = 0; i < m_bodies.size(); ++i) CollectBone(i);
 
 	if (desiredGlobals.empty()) return;
-	std::vector<DirectX::XMFLOAT3> originalLocalTranslation;
+
+	// Keep original local translations for "DynamicAndPositionAdjust" bones.
+	std::vector<XMFLOAT3> originalLocalTranslation;
 	if (!keepTranslationBones.empty())
 	{
 		originalLocalTranslation.resize(bonesDef.size());
 		for (size_t bi = 0; bi < bonesDef.size(); ++bi)
 		{
-			XMMATRIX lm = XMLoadFloat4x4(&bones.GetBoneLocalMatrix(bi));
+			const XMMATRIX lm = XMLoadFloat4x4(&bones.GetBoneLocalMatrix(bi));
 			XMFLOAT3 t; XMFLOAT4 r;
 			DecomposeTR(lm, t, r);
 			originalLocalTranslation[bi] = t;
 		}
 	}
 
-	std::vector<int> sortedBones;
-	sortedBones.reserve(desiredGlobals.size());
-	for (const auto& kv : desiredGlobals) sortedBones.push_back(kv.first);
-	std::sort(sortedBones.begin(), sortedBones.end(), [&](int a, int b) {
-		return ComputeDepth(bonesDef, a) < ComputeDepth(bonesDef, b);
-			  });
+	// ------------------------------------------------------------
+	// Build dependency graph (DAG) between bones that are written back.
+	// Dependencies:
+	//  1) Skeleton parent dependency (parent must be updated before child)
+	//  2) Joint-connected dependency (stable ordering; shallower/ancestor first)
+	// ------------------------------------------------------------
 
-	for (int boneIndex : sortedBones)
+	std::vector<int> nodes;
+	nodes.reserve(desiredGlobals.size());
+	for (const auto& kv : desiredGlobals) nodes.push_back(kv.first);
+
+	std::unordered_map<int, int> nodeId;
+	nodeId.reserve(nodes.size() * 2);
+	for (int i = 0; i < static_cast<int>(nodes.size()); ++i)
 	{
-		const auto& boneDef = bonesDef[boneIndex];
-		XMMATRIX desiredG = XMLoadFloat4x4(&desiredGlobals[boneIndex]);
+		nodeId[nodes[static_cast<size_t>(i)]] = i;
+	}
 
-		XMFLOAT4X4 checkG; XMStoreFloat4x4(&checkG, desiredG);
+	// Cache depths (rank) for deterministic ordering and joint edge direction.
+	std::vector<int> depthCache(bonesDef.size(), -1);
+	auto GetDepth = [&](int boneIndex) -> int
+		{
+			if (boneIndex < 0 || boneIndex >= static_cast<int>(bonesDef.size())) return 0;
+			int& d = depthCache[static_cast<size_t>(boneIndex)];
+			if (d >= 0) return d;
+
+			int depth = 0;
+			int c = boneIndex;
+			int guard = 0;
+			while (c >= 0 && c < static_cast<int>(bonesDef.size()) && guard++ < 1000)
+			{
+				c = bonesDef[static_cast<size_t>(c)].parentIndex;
+				++depth;
+			}
+			d = depth;
+			return d;
+		};
+
+	auto IsAncestor = [&](int anc, int node) -> bool
+		{
+			if (anc < 0 || node < 0) return false;
+			int c = node;
+			int guard = 0;
+			while (c >= 0 && c < static_cast<int>(bonesDef.size()) && guard++ < 1000)
+			{
+				if (c == anc) return true;
+				c = bonesDef[static_cast<size_t>(c)].parentIndex;
+			}
+			return false;
+		};
+
+	const int n = static_cast<int>(nodes.size());
+	std::vector<std::vector<int>> outEdges(static_cast<size_t>(n));
+	std::vector<int> indeg(static_cast<size_t>(n), 0);
+
+	// Deduplicate edges (bone indices are stable and < 2^31).
+	std::unordered_set<uint64_t> edgeSet;
+	edgeSet.reserve(static_cast<size_t>(n) * 4);
+
+	auto AddEdge = [&](int fromBone, int toBone)
+		{
+			if (fromBone == toBone) return;
+			auto itU = nodeId.find(fromBone);
+			auto itV = nodeId.find(toBone);
+			if (itU == nodeId.end() || itV == nodeId.end()) return;
+
+			const int u = itU->second;
+			const int v = itV->second;
+
+			const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(u)) << 32) | static_cast<uint32_t>(v);
+			if (!edgeSet.insert(key).second) return;
+
+			outEdges[static_cast<size_t>(u)].push_back(v);
+			++indeg[static_cast<size_t>(v)];
+		};
+
+	// (1) Parent dependencies
+	for (int boneIndex : nodes)
+	{
+		const int p = bonesDef[static_cast<size_t>(boneIndex)].parentIndex;
+		if (p >= 0 && nodeId.count(p))
+		{
+			AddEdge(p, boneIndex);
+		}
+	}
+
+	// (2) Joint-connected dependencies
+	for (const auto& jc : m_joints)
+	{
+		const int a = jc.bodyA;
+		const int b = jc.bodyB;
+		if (a < 0 || b < 0) continue;
+		if (a >= static_cast<int>(m_bodies.size())) continue;
+		if (b >= static_cast<int>(m_bodies.size())) continue;
+
+		const int boneA = m_bodies[static_cast<size_t>(a)].boneIndex;
+		const int boneB = m_bodies[static_cast<size_t>(b)].boneIndex;
+		if (boneA < 0 || boneB < 0) continue;
+		if (!nodeId.count(boneA) || !nodeId.count(boneB)) continue;
+		if (boneA == boneB) continue;
+
+		int from = boneA;
+		int to = boneB;
+
+		// Prefer true ancestry direction when it exists.
+		if (IsAncestor(boneA, boneB))
+		{
+			from = boneA; to = boneB;
+		}
+		else if (IsAncestor(boneB, boneA))
+		{
+			from = boneB; to = boneA;
+		}
+		else
+		{
+			// Otherwise choose a deterministic direction to keep the graph acyclic:
+			// smaller (depth, index) -> larger (depth, index).
+			const int dA = GetDepth(boneA);
+			const int dB = GetDepth(boneB);
+			if (dA < dB || (dA == dB && boneA < boneB))
+			{
+				from = boneA; to = boneB;
+			}
+			else
+			{
+				from = boneB; to = boneA;
+			}
+		}
+
+		AddEdge(from, to);
+	}
+
+	// Kahn topological sort with deterministic tie-break (depth/index).
+	struct ReadyItem
+	{
+		int depth;
+		int bone;
+		int id;
+	};
+	struct ReadyLess
+	{
+		bool operator()(const ReadyItem& a, const ReadyItem& b) const
+		{
+			if (a.depth != b.depth) return a.depth > b.depth; // min depth first
+			return a.bone > b.bone; // min index first
+		}
+	};
+
+	std::priority_queue<ReadyItem, std::vector<ReadyItem>, ReadyLess> ready;
+	ready = {};
+
+	for (int id = 0; id < n; ++id)
+	{
+		if (indeg[static_cast<size_t>(id)] == 0)
+		{
+			const int bone = nodes[static_cast<size_t>(id)];
+			ready.push({ GetDepth(bone), bone, id });
+		}
+	}
+
+	std::vector<int> topoOrder;
+	topoOrder.reserve(nodes.size());
+
+	std::vector<int> indegWork = indeg;
+	while (!ready.empty())
+	{
+		const ReadyItem cur = ready.top();
+		ready.pop();
+
+		topoOrder.push_back(cur.bone);
+
+		for (int v : outEdges[static_cast<size_t>(cur.id)])
+		{
+			int& deg = indegWork[static_cast<size_t>(v)];
+			--deg;
+			if (deg == 0)
+			{
+				const int bone = nodes[static_cast<size_t>(v)];
+				ready.push({ GetDepth(bone), bone, v });
+			}
+		}
+	}
+
+	// Safety fallback: if any nodes remain (cycle), append by deterministic rank.
+	if (topoOrder.size() != nodes.size())
+	{
+		std::vector<int> remaining;
+		remaining.reserve(nodes.size() - topoOrder.size());
+
+		std::vector<uint8_t> inOrder(bonesDef.size(), 0);
+		for (int b : topoOrder)
+		{
+			if (b >= 0 && b < static_cast<int>(bonesDef.size())) inOrder[static_cast<size_t>(b)] = 1;
+		}
+
+		for (int b : nodes)
+		{
+			if (b >= 0 && b < static_cast<int>(bonesDef.size()) && !inOrder[static_cast<size_t>(b)])
+			{
+				remaining.push_back(b);
+			}
+		}
+
+		std::sort(remaining.begin(), remaining.end(), [&](int a, int b)
+				  {
+					  const int da = GetDepth(a), db = GetDepth(b);
+					  if (da != db) return da < db;
+					  return a < b;
+				  });
+
+		topoOrder.insert(topoOrder.end(), remaining.begin(), remaining.end());
+	}
+
+	// ------------------------------------------------------------
+	// Apply write-back in topological order and keep an "applied" global cache.
+	// This avoids inconsistencies when we override local translation for
+	// DynamicAndPositionAdjust bones: children will see the actual parent transform.
+	// ------------------------------------------------------------
+
+	std::unordered_map<int, XMFLOAT4X4> appliedGlobals;
+	appliedGlobals.reserve(topoOrder.size() * 2);
+
+	for (int boneIndex : topoOrder)
+	{
+		const auto& boneDef = bonesDef[static_cast<size_t>(boneIndex)];
+
+		const XMMATRIX desiredG = XMLoadFloat4x4(&desiredGlobals[boneIndex]);
+
+		// Validate matrix values (avoid propagating NaNs)
+		XMFLOAT4X4 checkG;
+		XMStoreFloat4x4(&checkG, desiredG);
 		bool valid = true;
-		for (int k = 0; k < 16; ++k) if (!std::isfinite(checkG.m[k / 4][k % 4])) valid = false;
+		for (int k = 0; k < 16; ++k)
+		{
+			if (!std::isfinite(checkG.m[k / 4][k % 4]))
+			{
+				valid = false; break;
+			}
+		}
 		if (!valid) continue;
 
 		XMMATRIX parentG = XMMatrixIdentity();
-
 		if (boneDef.parentIndex >= 0)
 		{
-			if (desiredGlobals.count(boneDef.parentIndex))
+			auto it = appliedGlobals.find(boneDef.parentIndex);
+			if (it != appliedGlobals.end())
 			{
-				parentG = XMLoadFloat4x4(&desiredGlobals[boneDef.parentIndex]);
+				parentG = XMLoadFloat4x4(&it->second);
 			}
 			else
 			{
 				parentG = XMLoadFloat4x4(&bones.GetBoneGlobalMatrix(boneDef.parentIndex));
 			}
-			XMVECTOR rel = XMVectorSubtract(
-				Load3(boneDef.position), Load3(bonesDef[boneDef.parentIndex].position));
+
+			const XMVECTOR rel = XMVectorSubtract(
+				Load3(boneDef.position),
+				Load3(bonesDef[static_cast<size_t>(boneDef.parentIndex)].position));
 			parentG = XMMatrixTranslationFromVector(rel) * parentG;
 		}
 		else
@@ -1998,8 +2230,10 @@ void MmdPhysicsWorld::WriteBackBones(const PmxModel& model, BoneSolver& bones)
 			parentG = XMMatrixTranslationFromVector(Load3(boneDef.position));
 		}
 
-		XMMATRIX localMat = desiredG * XMMatrixInverse(nullptr, parentG);
-		XMFLOAT3 t; XMFLOAT4 r;
+		const XMMATRIX localMat = desiredG * XMMatrixInverse(nullptr, parentG);
+
+		XMFLOAT3 t;
+		XMFLOAT4 r;
 		DecomposeTR(localMat, t, r);
 
 		if (!std::isfinite(t.x) || !std::isfinite(t.y) || !std::isfinite(t.z)) continue;
@@ -2007,11 +2241,21 @@ void MmdPhysicsWorld::WriteBackBones(const PmxModel& model, BoneSolver& bones)
 
 		if (!keepTranslationBones.empty() && keepTranslationBones.count(boneIndex))
 		{
-			t = originalLocalTranslation[boneIndex];
+			t = originalLocalTranslation[static_cast<size_t>(boneIndex)];
 		}
-		bones.SetBoneLocalPose(boneIndex, t, r);
+
+		bones.SetBoneLocalPose(static_cast<size_t>(boneIndex), t, r);
+
+		// Cache the actually applied global transform for downstream bones.
+		const XMMATRIX appliedLocal = MatrixFromTR(t, r);
+		const XMMATRIX appliedG = appliedLocal * parentG;
+
+		XMFLOAT4X4 appliedGF{};
+		XMStoreFloat4x4(&appliedGF, appliedG);
+		appliedGlobals[boneIndex] = appliedGF;
 	}
 }
+
 
 XMVECTOR MmdPhysicsWorld::Load3(const XMFLOAT3& v)
 {
