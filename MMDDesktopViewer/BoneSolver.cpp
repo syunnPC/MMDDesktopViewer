@@ -24,6 +24,16 @@
 #define BONESOLVER_MAX_KNEE_DELTA_PER_FRAME_RAD 0.65f
 #endif
 
+#ifndef BONESOLVER_DEFAULT_POLE_WORLD_X
+#define BONESOLVER_DEFAULT_POLE_WORLD_X 0.0f
+#endif
+#ifndef BONESOLVER_DEFAULT_POLE_WORLD_Y
+#define BONESOLVER_DEFAULT_POLE_WORLD_Y 0.0f
+#endif
+#ifndef BONESOLVER_DEFAULT_POLE_WORLD_Z
+#define BONESOLVER_DEFAULT_POLE_WORLD_Z 1.0f
+#endif
+
 using namespace DirectX;
 
 namespace
@@ -636,6 +646,307 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 	// [最適化] 更新チェーン探索用バッファ（スタック確保で高速化）
 	// 通常の人型モデルのIKチェーンは短いため16階層あれば十分
 	int chainBuffer[16];
+	// --- 解析的2ボーンIK（膝/肘などの1軸制限チェーン） ---
+	// 2ボーン + 中間が明確な1軸制限(例: 膝)のケースは、CCD反復より解析解の方が安定しやすい。
+	auto TrySolveAnalyticTwoBoneHinge = [&]() -> bool
+		{
+			if (ikBone.ikLinks.size() != 2) return false;
+
+			const auto& link0 = ikBone.ikLinks[0];
+			const auto& link1 = ikBone.ikLinks[1];
+
+			auto isAxisXOnly = [&](const auto& link) -> bool
+				{
+					if (!link.hasLimit) return false;
+					// YZがほぼゼロ（±0.1deg程度以内）ならXのみとみなす
+					const float eps = 0.00174533f; // 0.1deg in rad
+					const float ymin = std::fabs(MaybeDegreesToRadians(link.limitMin.y));
+					const float ymax = std::fabs(MaybeDegreesToRadians(link.limitMax.y));
+					const float zmin = std::fabs(MaybeDegreesToRadians(link.limitMin.z));
+					const float zmax = std::fabs(MaybeDegreesToRadians(link.limitMax.z));
+					return (ymin < eps && ymax < eps && zmin < eps && zmax < eps);
+				};
+
+			const bool axis0 = isAxisXOnly(link0);
+			const bool axis1 = isAxisXOnly(link1);
+			if (axis0 == axis1) return false; // 0個 or 2個
+
+			const auto& hingeLink = axis0 ? link0 : link1; // 1軸制限（膝/肘）
+			const auto& rootLink = axis0 ? link1 : link0;  // 付け根側（腿/上腕）
+
+			const int midIdxI = hingeLink.boneIndex;
+			const int rootIdxI = rootLink.boneIndex;
+			if (midIdxI < 0 || rootIdxI < 0) return false;
+
+			const size_t midIdx = (size_t)midIdxI;
+			const size_t rootIdx = (size_t)rootIdxI;
+
+			if (rootIdx >= m_bones.size() || midIdx >= m_bones.size() || targetIdx >= m_bones.size()) return false;
+
+			// 2ボーン(root -> mid -> target) の形になっていること
+			if (m_bones[midIdx].parentIndex != (int)rootIdx) return false;
+			if (m_bones[targetIdx].parentIndex != (int)midIdx) return false;
+
+			// 現在の位置
+			XMMATRIX rootGlobal0 = XMLoadFloat4x4(&m_boneStates[rootIdx].globalMatrix);
+			XMMATRIX midGlobal0 = XMLoadFloat4x4(&m_boneStates[midIdx].globalMatrix);
+			XMMATRIX tgtGlobal0 = XMLoadFloat4x4(&m_boneStates[targetIdx].globalMatrix);
+
+			XMVECTOR A = rootGlobal0.r[3];
+			XMVECTOR B = midGlobal0.r[3];
+			XMVECTOR C = tgtGlobal0.r[3];
+
+			XMVECTOR destPos = XMLoadFloat4x4(&m_boneStates[boneIndex].globalMatrix).r[3];
+
+			XMVECTOR AB = XMVectorSubtract(B, A);
+			XMVECTOR BC = XMVectorSubtract(C, B);
+
+			const float L1 = std::sqrt(std::max(0.0f, XMVectorGetX(XMVector3LengthSq(AB))));
+			const float L2 = std::sqrt(std::max(0.0f, XMVectorGetX(XMVector3LengthSq(BC))));
+			if (L1 < 1.0e-5f || L2 < 1.0e-5f) return false;
+
+			// rootの親空間（rootローカル回転を適用する空間）
+			XMMATRIX parentGlobal = XMMatrixIdentity();
+			const int parentIdx = m_bones[rootIdx].parentIndex;
+			if (parentIdx >= 0 && parentIdx < (int)m_bones.size())
+			{
+				parentGlobal = XMLoadFloat4x4(&m_boneStates[parentIdx].globalMatrix);
+			}
+			XMMATRIX parentInv = XMMatrixInverse(nullptr, parentGlobal);
+
+			// ターゲット距離を、膝の制限範囲で達成可能な距離にクランプ（届かない場合は最も近い距離へ）
+			XMVECTOR AD = XMVectorSubtract(destPos, A);
+			float dDesired = std::sqrt(std::max(0.0f, XMVectorGetX(XMVector3LengthSq(AD))));
+			if (dDesired < 1.0e-6f) return false;
+
+			XMVECTOR dirAD = XMVector3Normalize(AD);
+
+			float minReach = std::fabs(L1 - L2);
+			float maxReach = L1 + L2;
+
+			if (hingeLink.hasLimit)
+			{
+				float aMin = MaybeDegreesToRadians(hingeLink.limitMin.x);
+				float aMax = MaybeDegreesToRadians(hingeLink.limitMax.x);
+				if (aMin > aMax) std::swap(aMin, aMax);
+				aMin = std::clamp(aMin, -XM_PI, XM_PI);
+				aMax = std::clamp(aMax, -XM_PI, XM_PI);
+
+				auto distFrom = [&](float ang) -> float
+					{
+						const float c = std::cos(ang);
+						const float v = L1 * L1 + L2 * L2 + 2.0f * L1 * L2 * c;
+						return std::sqrt(std::max(0.0f, v));
+					};
+				const float r0 = distFrom(aMin);
+				const float r1 = distFrom(aMax);
+				minReach = std::min(r0, r1);
+				maxReach = std::max(r0, r1);
+			}
+
+			const float epsReach = 1.0e-4f;
+			float d = std::clamp(dDesired, minReach + epsReach, maxReach - epsReach);
+			XMVECTOR destClampedPos = XMVectorAdd(A, XMVectorScale(dirAD, d));
+
+
+			XMVECTOR u = XMVector3Normalize(XMVectorSubtract(destClampedPos, A)); // root->target 方向
+			if (XMVectorGetX(XMVector3LengthSq(u)) < 1.0e-12f) return false;
+
+			XMVECTOR rootX = XMLoadFloat4x4(&m_boneStates[rootIdx].globalMatrix).r[0]; // World X axis of Root
+
+			XMVECTOR planeN = XMVectorSubtract(rootX, XMVectorScale(u, XMVectorGetX(XMVector3Dot(rootX, u))));
+
+			if (XMVectorGetX(XMVector3LengthSq(planeN)) < 1.0e-5f)
+			{
+				// 万が一、足が真横(X軸方向)に伸びて軸と重なった場合のフォールバック
+				// Y軸などを仮の法線とする
+				planeN = XMVector3Cross(u, XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f));
+			}
+			planeN = XMVector3Normalize(planeN);
+
+			XMVECTOR poleW = XMLoadFloat4x4(&m_boneStates[rootIdx].globalMatrix).r[2]; // World Z axis of Root
+
+			// 逆関節(鳥足)設定の場合は反転
+			if (hingeLink.hasLimit)
+			{
+				float minRad = MaybeDegreesToRadians(hingeLink.limitMin.x);
+				float maxRad = MaybeDegreesToRadians(hingeLink.limitMax.x);
+				if ((minRad + maxRad) * 0.5f < 0.0f)
+				{
+					poleW = XMVectorNegate(poleW);
+				}
+			}
+
+			// 平面上の直交ベクトル v (膝が出る方向)
+			XMVECTOR v = XMVector3Cross(planeN, u);
+			v = XMVector3Normalize(v);
+
+			const float a = (L1 * L1 - L2 * L2 + d * d) / (2.0f * d);
+			float h2 = L1 * L1 - a * a;
+			if (h2 < 0.0f) h2 = 0.0f;
+			const float h = std::sqrt(h2);
+
+			XMVECTOR base = XMVectorAdd(A, XMVectorScale(u, a));
+			XMVECTOR B1 = XMVectorAdd(base, XMVectorScale(v, h));
+			XMVECTOR B2 = XMVectorSubtract(base, XMVectorScale(v, h));
+
+			// 2解のうち「膝が poleW 方向へ出る」方を選ぶ
+			const float s1 = XMVectorGetX(XMVector3Dot(XMVectorSubtract(B1, base), poleW));
+			const float s2 = XMVectorGetX(XMVector3Dot(XMVectorSubtract(B2, base), poleW));
+			XMVECTOR Bdes = (s1 >= s2) ? B1 : B2;
+
+			XMVECTOR upperCur = XMVector3Normalize(AB);
+			XMVECTOR upperDes = XMVector3Normalize(XMVectorSubtract(Bdes, A));
+			auto UpdateToTargetFrom = [&](size_t changedIdx)
+				{
+					UpdateBoneTransform(changedIdx);
+
+					int childCursor = m_bones[targetIdx].parentIndex;
+					int chainCount = 0;
+					bool connected = false;
+
+					while (childCursor >= 0 && chainCount < 16)
+					{
+						if (childCursor == (int)changedIdx)
+						{
+							connected = true;
+							break;
+						}
+						chainBuffer[chainCount++] = childCursor;
+						childCursor = m_bones[childCursor].parentIndex;
+					}
+
+					if (connected)
+					{
+						for (int i = chainCount - 1; i >= 0; --i) UpdateBoneTransform(chainBuffer[i]);
+						UpdateBoneTransform(targetIdx);
+					}
+					else
+					{
+						UpdateBoneTransform(targetIdx);
+					}
+				};
+
+			// 1) root swing: upperCur -> upperDes
+			{
+				XMVECTOR axisW = XMVector3Cross(upperCur, upperDes);
+				const float axisLenSq = XMVectorGetX(XMVector3LengthSq(axisW));
+				const float dot = std::clamp(XMVectorGetX(XMVector3Dot(upperCur, upperDes)), -1.0f, 1.0f);
+				if (axisLenSq > 1.0e-10f)
+				{
+					const float axisLen = std::sqrt(std::max(axisLenSq, 0.0f));
+					const float angle = std::atan2(axisLen, dot);
+					if (angle > 1.0e-6f)
+					{
+						XMVECTOR axisLocal = XMVector3TransformNormal(axisW, parentInv);
+						if (XMVectorGetX(XMVector3LengthSq(axisLocal)) > 1.0e-10f)
+						{
+							axisLocal = XMVector3Normalize(axisLocal);
+
+							XMVECTOR deltaRot = XMQuaternionRotationAxis(axisLocal, angle);
+
+							auto& rootState = m_boneStates[rootIdx];
+							XMVECTOR q = XMQuaternionNormalize(XMQuaternionMultiply(XMLoadFloat4(&rootState.localRotation), deltaRot));
+
+							if (rootLink.hasLimit) q = ClampIKRotationRobust(q, rootLink.limitMin, rootLink.limitMax);
+
+							XMStoreFloat4(&rootState.localRotation, q);
+							UpdateToTargetFrom(rootIdx);
+						}
+					}
+				}
+			}
+
+			// 【修正2】root twist: 無効化 (コメントアウト)
+			// 足の内股ねじれの原因になるため削除
+			/*
+			{
+				XMMATRIX rootGlobal = XMLoadFloat4x4(&m_boneStates[rootIdx].globalMatrix);
+				XMVECTOR xAxisW = XMVector3Normalize(rootGlobal.r[0]);
+				... (省略)
+			}
+			*/
+
+			// 3) hinge(middle) angle: law of cos (解析)
+			{
+				const float cosInternal = std::clamp((L1 * L1 + L2 * L2 - d * d) / (2.0f * L1 * L2), -1.0f, 1.0f);
+				const float internal = std::acos(cosInternal);
+				float flex = XM_PI - internal; // 0: 伸び, +: 曲げ
+
+				// 【修正1】符号決定ロジック
+				// 位置関係から符号を推測すると、足を前に出した時などに反転してしまうため、
+				// リンクの「可動域制限(Limit)」を見て、可動範囲が広い方向に曲げるように固定します。
+				float sign = 1.0f;
+				if (hingeLink.hasLimit)
+				{
+					float minRad = MaybeDegreesToRadians(hingeLink.limitMin.x);
+					float maxRad = MaybeDegreesToRadians(hingeLink.limitMax.x);
+
+					// 可動域の絶対値が大きい方を「曲がる方向」とみなす
+					if (std::abs(minRad) > std::abs(maxRad))
+					{
+						sign = -1.0f;
+					}
+					else
+					{
+						sign = 1.0f;
+					}
+				}
+				else
+				{
+					if (m_hasLastIkLimitedEuler[midIdx]) sign = (m_lastIkLimitedEuler[midIdx].x >= 0.0f) ? 1.0f : -1.0f;
+				}
+
+				float targetAngle = sign * flex;
+
+				float minRad = -XM_PI, maxRad = XM_PI;
+				if (hingeLink.hasLimit)
+				{
+					minRad = MaybeDegreesToRadians(hingeLink.limitMin.x);
+					maxRad = MaybeDegreesToRadians(hingeLink.limitMax.x);
+					if (minRad > maxRad) std::swap(minRad, maxRad);
+				}
+
+				// wrap / clamp / spike suppression
+				const float center = 0.5f * (minRad + maxRad);
+				float ref = center;
+				if (m_hasLastIkLimitedEuler[midIdx]) ref = m_lastIkLimitedEuler[midIdx].x;
+				targetAngle = WrapAngleNear(targetAngle, ref);
+				targetAngle = std::clamp(targetAngle, minRad, maxRad);
+
+				if (m_hasLastIkLimitedEuler[midIdx])
+				{
+					const float prev = m_lastIkLimitedEuler[midIdx].x;
+					float ta = WrapAngleNear(targetAngle, prev);
+
+					XMVECTOR tgtPosW = XMLoadFloat4x4(&m_boneStates[targetIdx].globalMatrix).r[3];
+					const float err = std::sqrt(std::max(0.0f, XMVectorGetX(XMVector3LengthSq(XMVectorSubtract(destPos, tgtPosW)))));
+
+					float maxDelta = (float)BONESOLVER_MAX_KNEE_DELTA_PER_FRAME_RAD;
+					if (err > 0.05f) maxDelta = DirectX::XM_PI;
+					else if (err > 0.02f) maxDelta = 1.2f;
+					else if (err > 0.01f) maxDelta = 0.9f;
+
+					float dd = ta - prev;
+					dd = std::clamp(dd, -maxDelta, +maxDelta);
+					targetAngle = std::clamp(prev + dd, minRad, maxRad);
+				}
+
+				XMVECTOR kneeQ = XMQuaternionRotationAxis(XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f), targetAngle);
+				auto& midState = m_boneStates[midIdx];
+				XMStoreFloat4(&midState.localRotation, kneeQ);
+				m_lastIkLimitedEuler[midIdx].x = targetAngle;
+				m_hasLastIkLimitedEuler[midIdx] = 1;
+
+				UpdateToTargetFrom(midIdx);
+			}
+
+			return true;
+		};
+
+	if (TrySolveAnalyticTwoBoneHinge()) return;
+
+
 
 	for (int loop = 0; loop < loopCount; ++loop)
 	{
