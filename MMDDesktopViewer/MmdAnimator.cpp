@@ -371,16 +371,16 @@ void MmdAnimator::Tick(double dtSeconds)
 	{
 		using namespace DirectX;
 
-		const float deadZoneYaw = XMConvertToRadians(0.1f);
-		const float deadZonePitchUp = XMConvertToRadians(0.1f);
-		const float deadZonePitchDown = XMConvertToRadians(0.1f);
-
 		const float maxNeckYaw = XMConvertToRadians(50.0f);
 		const float maxNeckPitchUp = XMConvertToRadians(25.0f);
 		const float maxNeckPitchDown = XMConvertToRadians(35.0f);
 
 		const float maxEyeYaw = XMConvertToRadians(20.0f);
-		const float maxEyePitch = XMConvertToRadians(10.0f);
+		const float maxEyePitch = XMConvertToRadians(5.0f);
+
+		const float deadZoneYaw = maxEyeYaw;
+		const float deadZonePitchUp = maxEyePitch;
+		const float deadZonePitchDown = maxEyePitch;
 
 		const float pitchNeckGain = 1.25f;
 
