@@ -59,6 +59,7 @@ public:
 	void SetLookAtState(bool enabled, float yaw, float pitch);
 	void SetLookAtTarget(bool enabled, const DirectX::XMFLOAT3& targetPos);
 	DirectX::XMFLOAT3 GetBoneGlobalPosition(const std::wstring& boneName) const;
+	DirectX::XMFLOAT4X4 GetBoneGlobalMatrix(const std::wstring& boneName) const;
 	// ------------------
 
 	const PmxModel* Model() const
@@ -96,6 +97,22 @@ public:
 	}
 
 	void GetBounds(float& minx, float& miny, float& minz, float& maxx, float& maxy, float& maxz) const;
+
+	void SetAutoBlinkEnabled(bool enabled)
+	{
+		m_autoBlinkEnabled = enabled;
+	}
+	bool AutoBlinkEnabled() const
+	{
+		return m_autoBlinkEnabled;
+	}
+
+	void GetLookAtState(bool& enabled, float& yaw, float& pitch) const
+	{
+		enabled = m_lookAtEnabled;
+		yaw = m_lookAtYaw;
+		pitch = m_lookAtPitch;
+	}
 
 private:
 	std::unique_ptr<PmxModel> m_model;
@@ -140,4 +157,12 @@ private:
 	void CacheLookAtBones();
 
 	void UpdateMotionCache(const VmdMotion* motion);
+
+	bool m_autoBlinkEnabled{ false };
+	float m_blinkTimer{ 0.0f };       // 次の動作までのタイマー
+	float m_blinkWeight{ 0.0f };      // 現在のまばたきウェイト
+	int m_blinkState{ 0 };            // 0:Open, 1:Closing, 2:Closed, 3:Opening
+	float m_nextBlinkInterval{ 3.0f }; // 次のまばたきまでの時間
+
+	void UpdateAutoBlink(double dt);
 };

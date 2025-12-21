@@ -1,6 +1,7 @@
 ﻿#ifndef NOMINMAX
 #define NOMINMAX
 #endif
+
 #include "DcompRenderer.hpp"
 #include "d3dx12.hpp"
 #include "ExceptionHelper.hpp"
@@ -3009,4 +3010,22 @@ DirectX::XMFLOAT3 DcompRenderer::ProjectToScreen(const DirectX::XMFLOAT3& localP
 	float y = (1.0f - XMVectorGetY(ndc)) * 0.5f * (float)m_height;
 
 	return { x, y, w };
+}
+
+bool DcompRenderer::TryGetCachedMatrices(DirectX::XMFLOAT4X4& outModel,
+										 DirectX::XMFLOAT4X4& outView,
+										 DirectX::XMFLOAT4X4& outProj,
+										 UINT& outWidth,
+										 UINT& outHeight) const
+{
+	if (!m_matricesValid || m_width == 0 || m_height == 0)
+	{
+		return false;
+	}
+	outModel = m_lastModelMatrix;
+	outView = m_lastViewMatrix;
+	outProj = m_lastProjMatrix;
+	outWidth = m_width;
+	outHeight = m_height;
+	return true;
 }

@@ -24,38 +24,6 @@ static std::wstring Utf8ToW(const char* s)
 	return out;
 }
 
-//思ってたのと違うから使わないかも
-[[maybe_unused]] static void ApplyCpuHardCapPercent(int percent)
-{
-	percent = std::clamp(percent, 1, 100);
-
-	if (!g_cpuJob)
-	{
-		g_cpuJob = CreateJobObjectW(nullptr, nullptr);
-		if (!g_cpuJob) return;
-
-		JOBOBJECT_EXTENDED_LIMIT_INFORMATION eli{};
-		eli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-		SetInformationJobObject(g_cpuJob, JobObjectExtendedLimitInformation, &eli, sizeof(eli));
-
-		if (!AssignProcessToJobObject(g_cpuJob, GetCurrentProcess()))
-		{
-			CloseHandle(g_cpuJob);
-			g_cpuJob = nullptr;
-			return;
-		}
-	}
-
-	JOBOBJECT_CPU_RATE_CONTROL_INFORMATION cpu{};
-	cpu.ControlFlags = JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP;
-
-	cpu.CpuRate = static_cast<DWORD>(percent * 100);
-	if (!SetInformationJobObject(g_cpuJob, JobObjectCpuRateControlInformation, &cpu, sizeof(cpu)))
-	{
-		OutputDebugStringW(L"SetInformationJobObject() failed; ignoring.");
-	}
-}
-
 [[maybe_unused]] static void ApplyCpuWeightBased(int weight)
 {
 	weight = std::clamp(weight, 1, 9);

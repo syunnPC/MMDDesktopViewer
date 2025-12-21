@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <DirectXMath.h>
 
 namespace
@@ -54,6 +55,9 @@ MmdAnimator::MmdAnimator()
 	DirectX::XMStoreFloat4x4(&m_motionTransform, DirectX::XMMatrixIdentity());
 	m_boneSolver = std::make_unique<BoneSolver>();
 	m_physicsWorld = std::make_unique<MmdPhysicsWorld>();
+
+	// まばたき間隔の初期化 (2.0 ~ 6.0秒)
+	m_nextBlinkInterval = 2.0f + static_cast<float>(rand()) / RAND_MAX * 4.0f;
 }
 
 MmdAnimator::~MmdAnimator() = default;
@@ -338,25 +342,47 @@ void MmdAnimator::Tick(double dtSeconds)
 		}
 	}
 
+	// --- 自動まばたき処理 ---
+	if (m_autoBlinkEnabled)
+	{
+		// モーション再生中（モーションがあり、かつ一時停止していない）かどうか
+		bool isPlaying = (motion != nullptr && !m_paused);
+
+		if (!isPlaying)
+		{
+			// 一時停止中 または モーション無し の場合は自動まばたきを適用
+			UpdateAutoBlink(dtSeconds);
+
+			// 既存のモーフ値(一時停止中のポーズなど)と比較し、目が閉じている度合いが大きい方を採用する
+			float currentW = m_pose.morphWeights[L"まばたき"];
+			m_pose.morphWeights[L"まばたき"] = std::max(currentW, m_blinkWeight);
+		}
+		else
+		{
+			// 再生中は干渉しないように状態をリセット（目は開けておく）
+			m_blinkState = 0; // Open
+			m_blinkTimer = 0.0f;
+			m_blinkWeight = 0.0f;
+		}
+	}
+	// ----------------------
+
 	if (m_lookAtEnabled && m_model)
 	{
 		using namespace DirectX;
 
-		// 基本設定値 (ラジアン)
-// 横(yaw)と縦(pitch)で「目だけで追う幅」と「目の可動範囲」を分ける。
-// 縦方向は目だけで追う幅を狭め、早めに首/頭が動くようにする。
-		const float deadZoneYaw = XMConvertToRadians(15.0f);          // 横のデッドゾーン
-		const float deadZonePitchUp = XMConvertToRadians(3.0f);       // 上向きのデッドゾーン（小さいほど早く顔が動く）
-		const float deadZonePitchDown = XMConvertToRadians(6.0f);     // 下向きのデッドゾーン
+		const float deadZoneYaw = XMConvertToRadians(0.1f);
+		const float deadZonePitchUp = XMConvertToRadians(0.1f);
+		const float deadZonePitchDown = XMConvertToRadians(0.1f);
 
-		const float maxNeckYaw = XMConvertToRadians(50.0f);           // 首の横回転制限
-		const float maxNeckPitchUp = XMConvertToRadians(25.0f);       // 上向き首制限
-		const float maxNeckPitchDown = XMConvertToRadians(35.0f);     // 下向き首制限
+		const float maxNeckYaw = XMConvertToRadians(50.0f);
+		const float maxNeckPitchUp = XMConvertToRadians(25.0f);
+		const float maxNeckPitchDown = XMConvertToRadians(35.0f);
 
-		const float maxEyeYaw = XMConvertToRadians(20.0f);            // 目の横回転制限
-		const float maxEyePitch = XMConvertToRadians(10.0f);          // 目の縦回転制限（狭めると顔が先に動く）
+		const float maxEyeYaw = XMConvertToRadians(20.0f);
+		const float maxEyePitch = XMConvertToRadians(10.0f);
 
-		const float pitchNeckGain = 1.25f;                            // 縦方向の首/頭の寄与を増やす（1.0=従来）
+		const float pitchNeckGain = 1.25f;
 
 		// ヘルパー: 目と首の配分計算
 		auto ComputeBoneAngles = [&](float target, float deadZone, float maxNeck, float maxEyeLocal, float neckGain, float& outNeck, float& outEye)
@@ -383,25 +409,13 @@ void MmdAnimator::Tick(double dtSeconds)
 		float neckYaw, eyeYaw;
 		ComputeBoneAngles(m_lookAtYaw, deadZoneYaw, maxNeckYaw, maxEyeYaw, 1.0f, neckYaw, eyeYaw);
 
-		// 上向き判定 (App.cppの実装依存：pitch正が上向きと仮定)
 		bool isUpward = (m_lookAtPitch > 0.0f);
-
 		float currentDeadZonePitch = isUpward ? deadZonePitchUp : deadZonePitchDown;
 		float currentMaxNeckPitch = isUpward ? maxNeckPitchUp : maxNeckPitchDown;
 
 		float neckPitch, eyePitch;
 		ComputeBoneAngles(m_lookAtPitch, currentDeadZonePitch, currentMaxNeckPitch, maxEyePitch, pitchNeckGain, neckPitch, eyePitch);
 
-
-		// 追従方向（上下左右）が反転している場合の符号補正（必要なモデルでのみ有効化）
-		// ※現在は App 側の yaw/pitch とボーン適用の向きが一致している想定のため無効化。
-		// neckYaw = -neckYaw;
-		// eyeYaw = -eyeYaw;
-		// neckPitch = -neckPitch;
-		// eyePitch = -eyePitch;
-
-		// 首と頭で負担を分ける（首は控えめ・頭を多め）
-		// 縦方向は特に「顔ごと」追従させたいので、頭の寄与を大きくする。
 		const float neckYawW = 0.45f;
 		const float headYawW = 0.55f;
 		const float neckPitchW = 0.30f;
@@ -618,4 +632,95 @@ void MmdAnimator::SetLookAtTarget(bool enabled, const DirectX::XMFLOAT3& targetP
 	const float limit = XMConvertToRadians(90.0f);
 	m_lookAtYaw = std::clamp(yaw, -limit, limit);
 	m_lookAtPitch = std::clamp(pitch, -limit, limit);
+}
+
+void MmdAnimator::UpdateAutoBlink(double dt)
+{
+	const float closeSpeed = 0.1f;  // 閉じるのにかかる時間
+	const float keepClosed = 0.05f; // 閉じている時間
+	const float openSpeed = 0.15f;  // 開くのにかかる時間
+
+	m_blinkTimer += static_cast<float>(dt);
+
+	switch (m_blinkState)
+	{
+		case 0: // Open (待機中)
+			if (m_blinkTimer >= m_nextBlinkInterval)
+			{
+				m_blinkState = 1;
+				m_blinkTimer = 0.0f;
+			}
+			m_blinkWeight = 0.0f;
+			break;
+
+		case 1: // Closing
+		{
+			float t = m_blinkTimer / closeSpeed;
+			if (t >= 1.0f)
+			{
+				t = 1.0f;
+				m_blinkState = 2;
+				m_blinkTimer = 0.0f;
+			}
+			m_blinkWeight = t;
+			break;
+		}
+
+		case 2: // Closed (維持)
+			if (m_blinkTimer >= keepClosed)
+			{
+				m_blinkState = 3;
+				m_blinkTimer = 0.0f;
+			}
+			m_blinkWeight = 1.0f;
+			break;
+
+		case 3: // Opening
+		{
+			float t = m_blinkTimer / openSpeed;
+			if (t >= 1.0f)
+			{
+				t = 1.0f;
+				m_blinkState = 0;
+				m_blinkTimer = 0.0f;
+				// 次のまばたき時間をランダムに決定 (2.0秒 ～ 6.0秒)
+				m_nextBlinkInterval = 2.0f + static_cast<float>(rand()) / RAND_MAX * 4.0f;
+			}
+			m_blinkWeight = 1.0f - t;
+			break;
+		}
+	}
+}
+
+DirectX::XMFLOAT4X4 MmdAnimator::GetBoneGlobalMatrix(const std::wstring& boneName) const
+{
+	if (!m_boneSolver || !m_model)
+	{
+		DirectX::XMFLOAT4X4 identity;
+		DirectX::XMStoreFloat4x4(&identity, DirectX::XMMatrixIdentity());
+		return identity;
+	}
+
+	int idx = -1;
+	if (boneName == L"頭") idx = m_boneIdxHead;
+	else
+	{
+		const auto& bones = m_model->Bones();
+		for (size_t i = 0; i < bones.size(); ++i)
+		{
+			if (bones[i].name == boneName)
+			{
+				idx = (int)i; break;
+			}
+		}
+	}
+
+	if (idx >= 0 && idx < (int)m_boneSolver->BoneCount())
+	{
+		return m_boneSolver->GetBoneGlobalMatrix(idx);
+	}
+
+	DirectX::XMFLOAT4X4 identity;
+	DirectX::XMStoreFloat4x4(&identity, DirectX::XMMatrixIdentity());
+	return identity;
 }

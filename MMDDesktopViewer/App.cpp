@@ -57,6 +57,7 @@ namespace
 		CMD_TOGGLE_WINDOW_MANIP = 105,
 		CMD_EXIT = 199,
 		CMD_TOGGLE_LOOKAT = 106,
+		CMD_TOGGLE_AUTOBLINK = 107,
 		CMD_MOTION_BASE = 1000
 	};
 
@@ -450,99 +451,76 @@ void App::OnTimer()
 	// LookAt 計算
 	if (m_lookAtEnabled && m_animator && m_renderer)
 	{
+		// 頭ボーンの行列を取得
+		auto headM = m_animator->GetBoneGlobalMatrix(L"頭");
+
+		using namespace DirectX;
+		// ボーン行列から位置と上方向ベクトルを抽出
+		XMVECTOR pos = XMVectorSet(headM._41, headM._42, headM._43, 1.0f);
+		XMVECTOR up = XMVector3Normalize(XMVectorSet(headM._21, headM._22, headM._23, 0.0f));
+
+		// スクリーン座標へ投影
+		auto sPos = m_renderer->ProjectToScreen(XMFLOAT3(XMVectorGetX(pos), XMVectorGetY(pos), XMVectorGetZ(pos)));
+
+		// 軸の方向をスクリーン上で計算するための基準点
+		// ベクトルを長くして計算精度を確保
+		float axisLen = 5.0f;
+		XMVECTOR pUp = XMVectorAdd(pos, XMVectorScale(up, axisLen));
+		auto sUpPos = m_renderer->ProjectToScreen(XMFLOAT3(XMVectorGetX(pUp), XMVectorGetY(pUp), XMVectorGetZ(pUp)));
+
+		// スクリーン上での基底ベクトル
+		// 顔の上方向 (v_u)
+		float vx_u = sUpPos.x - sPos.x;
+		float vy_u = sUpPos.y - sPos.y;
+
+		// 正規化と右ベクトルの算出
+		float lenU = std::sqrt(vx_u * vx_u + vy_u * vy_u);
+		float vx_r = 1.0f, vy_r = 0.0f; // デフォルトは画面右
+
+		if (lenU > 1e-4f)
+		{
+			vx_u /= lenU;
+			vy_u /= lenU;
+
+			// 顔の「右方向」は、画面上の「上方向」を時計回りに90度回転させて生成
+			// これにより、顔が傾いていても直感的な操作感が維持されます
+			vx_r = -vy_u;
+			vy_r = vx_u;
+		}
+
+		// マウス位置との偏差
 		POINT pt{};
 		GetCursorPos(&pt);
 		ScreenToClient(m_renderWnd, &pt);
 
-		// 頭の現在位置（3D）を取得
-		auto headPos3D = m_animator->GetBoneGlobalPosition(L"頭");
+		float dx = (float)pt.x - sPos.x;
+		float dy = (float)pt.y - sPos.y;
 
-		// 頭のスクリーン位置を取得
-		auto headPosScreen = m_renderer->ProjectToScreen(headPos3D);
+		float localX = dx * vx_r + dy * vy_r; // 右成分
+		float localY = dx * vx_u + dy * vy_u; // 上成分
 
-		// スクリーン上での偏差（ピクセル）
-		float dx = (float)pt.x - headPosScreen.x;
-		float dy = (float)pt.y - headPosScreen.y;
+		// 距離係数を計算 (lenU は 5unit 分の長さ)
+		// 3.0f 程度が標準的な画角感に近いです
+		float dist = std::max(lenU * 3.0f, 150.0f);
 
-		// --- ロール（横倒し）補正 ---
-		// 以前の「右/上の2D基底を逆行列で解く」方式は、基底が直交しない(特に横を向いた時)と
-		// dx(左右)がdy(上下)に混入し、カーソルを左右に離しただけで顔が上を向く現象が出やすい。
-		// ここでは「首→頭」のスクリーン上の向きからロール角だけを推定し、2D回転で補正する。
-		auto IsZero3 = [](const DirectX::XMFLOAT3& v) {
-			const float eps = 1e-6f;
-			return (std::abs(v.x) < eps && std::abs(v.y) < eps && std::abs(v.z) < eps);
-			};
-		auto Sub3 = [](const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b) {
-			return DirectX::XMFLOAT3{ a.x - b.x, a.y - b.y, a.z - b.z };
-			};
-		auto Len3 = [](const DirectX::XMFLOAT3& v) {
-			return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-			};
-		auto Normalize3 = [&](const DirectX::XMFLOAT3& v) {
-			float len = Len3(v);
-			if (len < 1e-6f) return DirectX::XMFLOAT3{ 0,0,0 };
-			return DirectX::XMFLOAT3{ v.x / len, v.y / len, v.z / len };
-			};
-		auto AddScaled3 = [](const DirectX::XMFLOAT3& p, const DirectX::XMFLOAT3& dir, float s) {
-			return DirectX::XMFLOAT3{ p.x + dir.x * s, p.y + dir.y * s, p.z + dir.z * s };
-			};
+		float targetYaw = -std::atan2(localX, dist);
+		float targetPitch = std::atan2(localY, dist);
 
-		auto neck = m_animator->GetBoneGlobalPosition(L"首");
-		if (!IsZero3(neck) && !IsZero3(headPos3D))
-		{
-			auto v = Sub3(headPos3D, neck);
-			float d = Len3(v);
-			if (d > 1e-3f)
-			{
-				DirectX::XMFLOAT3 up3 = Normalize3(v);
-				float basisScale = std::max(1.0f, d * 0.5f);
+		// 現在の角度を取得
+		bool currentEnabled = false;
+		float currentYaw = 0.0f;
+		float currentPitch = 0.0f;
+		m_animator->GetLookAtState(currentEnabled, currentYaw, currentPitch);
 
-				auto pU = m_renderer->ProjectToScreen(AddScaled3(headPos3D, up3, basisScale));
-				float vUx = pU.x - headPosScreen.x;
-				float vUy = pU.y - headPosScreen.y;
-				float lenU = std::sqrt(vUx * vUx + vUy * vUy);
-				if (lenU > 1e-3f)
-				{
-					// スクリーン座標は +Y が下。モデルの「上方向」(首→頭)がスクリーンの上(-Y)を向くとき roll=0。
-					// vU の向きが傾いている分だけ、delta(dx,dy) を逆回転してロールを打ち消す。
-					float ux = vUx / lenU;
-					float uy = vUy / lenU;
+		// スムージング係数 (0.0=動かない ～ 1.0=瞬時に追従)
+		// 0.2 程度で適度な滑らかさになります
+		const float alpha = 0.2f;
 
-					// 方向の二義性対策:
-					// 「首→頭」の軸は、スクリーン上では (ux,uy) と (-ux,-uy) のどちらでも同じ軸を表す。
-					// ここで vU が下(+Y)を向いていると θ が π ずれて (dx,dy) が両方反転しやすいので、
-					// 必ず「上(0,-1)」側に揃える。
-					if (uy > 0.0f)
-					{
-						ux = -ux;
-						uy = -uy;
-					}
-					float theta = std::atan2(ux, -uy); // vU を (0,-1) に合わせる角
+		// 線形補間 (Lerp) で目標角度へ近づける
+		float nextYaw = currentYaw + (targetYaw - currentYaw) * alpha;
+		float nextPitch = currentPitch + (targetPitch - currentPitch) * alpha;
 
-					float c = std::cos(theta);
-					float s = std::sin(theta);
-					float ndx = c * dx + s * dy;
-					float ndy = -s * dx + c * dy;
-					dx = ndx;
-					dy = ndy;
-				}
-			}
-		}
-		// -------------------------------------------------------------------
-
-		RECT rc;
-		GetClientRect(m_renderWnd, &rc);
-		float h = (float)(rc.bottom - rc.top);
-		if (h < 1.0f) h = 1.0f;
-
-		float dist = h * 1.5f; // 係数で感度調整
-
-		// dx(右) -> 右を向くにはY軸負回転
-		float yaw = -std::atan2(dx, dist);
-
-		float pitch = -std::atan2(dy, dist);
-
-		m_animator->SetLookAtState(true, yaw, pitch);
+		m_animator->SetLookAtState(true, nextYaw, nextPitch);
 	}
 
 	if (m_animator)
@@ -1056,10 +1034,16 @@ void App::BuildTrayMenu()
 	std::wstring physText = (m_animator && m_animator->PhysicsEnabled()) ? L"物理: ON" : L"物理: OFF";
 	AppendMenuW(motionMenu, MF_STRING, CMD_TOGGLE_PHYSICS, physText.c_str());
 
-	// 追加: LookAt メニュー
+	// LookAt メニュー
 	UINT lookAtFlags = MF_STRING;
 	lookAtFlags |= m_lookAtEnabled ? MF_CHECKED : MF_UNCHECKED;
-	AppendMenuW(motionMenu, lookAtFlags, CMD_TOGGLE_LOOKAT, L"視線追従 (LookAt)");
+	AppendMenuW(motionMenu, lookAtFlags, CMD_TOGGLE_LOOKAT, L"視線追従");
+
+	// 自動まばたきメニュー
+	UINT blinkFlags = MF_STRING;
+	if (m_animator && m_animator->AutoBlinkEnabled()) blinkFlags |= MF_CHECKED;
+	else blinkFlags |= MF_UNCHECKED;
+	AppendMenuW(motionMenu, blinkFlags, CMD_TOGGLE_AUTOBLINK, L"自動まばたき");
 
 	AppendMenuW(motionMenu, MF_STRING, CMD_STOP_MOTION, L"停止 (リセット)");
 	AppendMenuW(motionMenu, MF_SEPARATOR, 0, nullptr);
@@ -1298,6 +1282,15 @@ void App::OnTrayCommand(UINT id)
 			BuildTrayMenu();
 			break;
 
+		case CMD_TOGGLE_AUTOBLINK:
+			if (m_animator)
+			{
+				bool current = m_animator->AutoBlinkEnabled();
+				m_animator->SetAutoBlinkEnabled(!current);
+				BuildTrayMenu();
+			}
+			break;
+
 		case CMD_TOGGLE_WINDOW_MANIP:
 			ApplyWindowManipulationMode(m_renderWnd, m_renderer.get(), !IsWindowManipulationMode(m_renderWnd));
 			BuildTrayMenu();
@@ -1321,6 +1314,7 @@ void App::OnTrayCommand(UINT id)
 				if (idx < m_motionFiles.size() && m_animator)
 				{
 					m_animator->LoadMotion(m_motionFiles[idx]);
+					BuildTrayMenu();
 				}
 			}
 			break;

@@ -53,6 +53,14 @@ public:
 	// 3D空間(Model Local)の座標をスクリーン(クライアント)座標に変換する
 	DirectX::XMFLOAT3 ProjectToScreen(const DirectX::XMFLOAT3& localPos) const;
 
+	// Get cached model/view/proj matrices and viewport from the last Render() call (for unprojection).
+	// Returns false if matrices are not ready yet.
+	bool TryGetCachedMatrices(DirectX::XMFLOAT4X4& outModel,
+							  DirectX::XMFLOAT4X4& outView,
+							  DirectX::XMFLOAT4X4& outProj,
+							  UINT& outWidth,
+							  UINT& outHeight) const;
+
 	void LoadTexturesForModel(const PmxModel* model,
 							  std::function<void(float, const wchar_t*)> onProgress,
 							  float startProgress, float endProgress);
