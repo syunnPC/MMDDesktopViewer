@@ -1,0 +1,119 @@
+#pragma once
+
+#include <windows.h>
+#include <functional>
+#include <wrl.h>
+
+struct ID2D1Factory;
+struct ID2D1DCRenderTarget;
+struct ID2D1SolidColorBrush;
+
+struct AppSettings;
+class DcompRenderer;
+class InputManager;
+class TrayIcon;
+
+class WindowManager
+{
+public:
+	struct Callbacks
+	{
+		std::function<void(UINT)> onTrayCommand;
+		std::function<void()> onTimer;
+		std::function<void(WPARAM, LPARAM)> onLoadComplete;
+		std::function<void()> onSaveSettings;
+	};
+
+	static constexpr UINT kLoadCompleteMessage = WM_APP + 200;
+
+	WindowManager(HINSTANCE hInst, InputManager& input, AppSettings& settings, Callbacks callbacks);
+	~WindowManager();
+
+	WindowManager(const WindowManager&) = delete;
+	WindowManager& operator=(const WindowManager&) = delete;
+
+	void Initialize();
+
+	HWND MessageWindow() const
+	{
+		return m_msgWnd;
+	}
+	HWND RenderWindow() const
+	{
+		return m_renderWnd;
+	}
+	HWND GizmoWindow() const
+	{
+		return m_gizmoWnd;
+	}
+
+	void SetRenderer(DcompRenderer* renderer);
+	void SetTray(TrayIcon* tray, HMENU menu);
+
+	void ApplyTopmost(bool alwaysOnTop) const;
+	void UpdateTimerInterval(UINT intervalMs);
+
+	void ToggleGizmoWindow();
+	void PositionGizmoWindow();
+	bool IsGizmoVisible() const
+	{
+		return m_gizmoVisible;
+	}
+
+	void RenderGizmo();
+
+	void InstallRenderClickThrough();
+	void ForceRenderTreeClickThrough();
+	void ToggleWindowManipulationMode();
+	bool IsWindowManipulationMode() const;
+
+	void UpdateSettingsForRenderSize();
+
+private:
+	static LRESULT CALLBACK WndProcThunk(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+	LRESULT WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+	void CreateHiddenMessageWindow();
+	void CreateRenderWindow();
+	void CreateGizmoWindow();
+
+	void EnsureGizmoD2D();
+	void DiscardGizmoD2D();
+
+	static LRESULT CALLBACK RenderClickThroughProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+	void ForceRenderTreeClickThroughFor(HWND hWnd);
+	static BOOL CALLBACK EnumChildForClickThrough(HWND hWnd, LPARAM lParam);
+	static void MakeClickThrough(HWND hWnd);
+
+	void ApplyWindowManipulationMode(bool enabled);
+
+	HINSTANCE m_hInst{};
+	InputManager& m_input;
+	AppSettings& m_settings;
+	Callbacks m_callbacks{};
+
+	HWND m_msgWnd{};
+	HWND m_renderWnd{};
+	HWND m_gizmoWnd{};
+
+	TrayIcon* m_tray{};
+	HMENU m_trayMenu{};
+
+	DcompRenderer* m_renderer{};
+
+	bool m_gizmoVisible{ false };
+
+	Microsoft::WRL::ComPtr<ID2D1Factory> m_d2dFactory;
+	Microsoft::WRL::ComPtr<ID2D1DCRenderTarget> m_gizmoRt;
+	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_gizmoBrushFill;
+	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_gizmoBrushStroke;
+
+	HDC m_gizmoDc{ nullptr };
+	HBITMAP m_gizmoBmp{ nullptr };
+	HGDIOBJ m_gizmoOldBmp{ nullptr };
+	void* m_gizmoBits{ nullptr };
+
+	WNDPROC m_prevRenderWndProc = nullptr;
+
+	static constexpr UINT_PTR kTimerId = 1;
+};

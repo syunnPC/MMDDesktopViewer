@@ -201,6 +201,7 @@
     <ClCompile Include="Dx12Context.cpp" />
     <ClCompile Include="FileUtil.cpp" />
     <ClCompile Include="GpuResourceManager.cpp" />
+    <ClCompile Include="InputManager.cpp" />
     <ClCompile Include="MmdAnimator.cpp" />
     <ClCompile Include="MmdPhysicsWorld.cpp" />
     <ClCompile Include="PmxModel.cpp" />
@@ -212,6 +213,7 @@
     <ClCompile Include="TrayIcon.cpp" />
     <ClCompile Include="VmdMotion.cpp" />
     <ClCompile Include="WicTexture.cpp" />
+    <ClCompile Include="WindowManager.cpp" />
     <ClCompile Include="WinMain.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -226,6 +228,7 @@
     <ClInclude Include="ExceptionHelper.hpp" />
     <ClInclude Include="FileUtil.hpp" />
     <ClInclude Include="GpuResourceManager.hpp" />
+    <ClInclude Include="InputManager.hpp" />
     <ClInclude Include="MmdAnimator.hpp" />
     <ClInclude Include="MmdPhysicsWorld.hpp" />
     <ClInclude Include="PmxModel.hpp" />
@@ -237,6 +240,7 @@
     <ClInclude Include="TrayIcon.hpp" />
     <ClInclude Include="VmdMotion.hpp" />
     <ClInclude Include="WicTexture.hpp" />
+    <ClInclude Include="WindowManager.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
