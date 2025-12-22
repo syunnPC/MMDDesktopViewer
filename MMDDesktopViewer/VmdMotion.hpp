@@ -24,6 +24,44 @@ public:
 		float weight{};
 	};
 
+	struct CameraKey
+	{
+		std::uint32_t frame{};
+		float distance{};
+		float posX{}, posY{}, posZ{};
+		float rotX{}, rotY{}, rotZ{};
+		std::uint8_t interp[24]{};
+		std::uint32_t viewAngle{};
+		bool perspective{};
+	};
+
+	struct LightKey
+	{
+		std::uint32_t frame{};
+		float colorR{}, colorG{}, colorB{};
+		float posX{}, posY{}, posZ{};
+	};
+
+	struct ShadowKey
+	{
+		std::uint32_t frame{};
+		std::uint8_t mode{};
+		float distance{};
+	};
+
+	struct IkState
+	{
+		std::wstring name;
+		bool enabled{};
+	};
+
+	struct IkKey
+	{
+		std::uint32_t frame{};
+		bool show{};
+		std::vector<IkState> states;
+	};
+
 	struct BoneTrack
 	{
 		std::wstring name;
@@ -55,6 +93,26 @@ public:
 		return m_morphTracks;
 	}
 
+	const std::vector<CameraKey>& CameraKeys() const
+	{
+		return m_cameraKeys;
+	}
+
+	const std::vector<LightKey>& LightKeys() const
+	{
+		return m_lightKeys;
+	}
+
+	const std::vector<ShadowKey>& ShadowKeys() const
+	{
+		return m_shadowKeys;
+	}
+
+	const std::vector<IkKey>& IkKeys() const
+	{
+		return m_ikKeys;
+	}
+
 	uint32_t MaxFrame() const
 	{
 		return m_maxFrame;
@@ -65,6 +123,10 @@ private:
 	std::filesystem::path m_path;
 	std::vector<BoneKey> m_boneKeys;
 	std::vector<MorphKey> m_morphKeys;
+	std::vector<CameraKey> m_cameraKeys;
+	std::vector<LightKey> m_lightKeys;
+	std::vector<ShadowKey> m_shadowKeys;
+	std::vector<IkKey> m_ikKeys;
 
 	std::vector<BoneTrack> m_boneTracks;
 	std::vector<MorphTrack> m_morphTracks;

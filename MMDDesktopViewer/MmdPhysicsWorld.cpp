@@ -1547,17 +1547,26 @@ void MmdPhysicsWorld::SolveBodyCollisions(float dt)
 
 				XMVECTOR T = XMVector3Cross(lever, imp);
 				XMVECTOR dTheta = XMVectorMultiply(XMLoadFloat3(&body.invInertia), T);
-				// Angular limit check (omitted for brevity, use same logic as original)
-				XMVECTOR q = XMLoadFloat4(&body.rotation);
-				// Quaternion update logic...
+				if (!IsVectorFinite3(dTheta)) return;
+				float maxTheta = std::max(0.0f, m_settings.maxAngularSpeed) * dt;
 				float theta = XMVectorGetX(XMVector3Length(dTheta));
-				if (theta > 1e-6f)
+				if (maxTheta > 0.0f && theta > maxTheta)
 				{
-					XMVECTOR axis = XMVectorScale(dTheta, 1.0f / theta);
-					XMVECTOR dq = XMQuaternionRotationAxis(axis, theta);
+					dTheta = XMVectorScale(dTheta, maxTheta / std::max(theta, kEps));
+					theta = maxTheta;
+				}
+
+				if (theta > kEps)
+				{
+					XMVECTOR dq = QuaternionFromRotationVector(dTheta);
+					if (!IsVectorFinite4(dq)) return;
+
+					XMVECTOR q = Load4(body.rotation);
+					if (!IsVectorFinite4(q)) return;
+
 					XMStoreFloat4(&body.rotation, XMQuaternionNormalize(XMQuaternionMultiply(dq, q)));
 				}
-				};
+			};
 
 			applyImpulse(A, XMVectorAdd(XMVectorNegate(dp), frictionImpulse), leverA);
 			applyImpulse(B, XMVectorSubtract(dp, frictionImpulse), leverB);

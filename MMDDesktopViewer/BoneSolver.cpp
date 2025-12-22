@@ -753,18 +753,42 @@ void BoneSolver::SolveIKBone(size_t boneIndex)
 			if (XMVectorGetX(XMVector3LengthSq(u)) < 1.0e-12f) return false;
 
 			XMVECTOR rootX = XMLoadFloat4x4(&m_boneStates[rootIdx].globalMatrix).r[0]; // World X axis of Root
+			XMVECTOR rootY = XMLoadFloat4x4(&m_boneStates[rootIdx].globalMatrix).r[1]; // World Y axis of Root
+			XMVECTOR rootZ = XMLoadFloat4x4(&m_boneStates[rootIdx].globalMatrix).r[2]; // World Z axis of Root
 
 			XMVECTOR planeN = XMVectorSubtract(rootX, XMVectorScale(u, XMVectorGetX(XMVector3Dot(rootX, u))));
 
 			if (XMVectorGetX(XMVector3LengthSq(planeN)) < 1.0e-5f)
 			{
 				// 万が一、足が真横(X軸方向)に伸びて軸と重なった場合のフォールバック
-				// Y軸などを仮の法線とする
-				planeN = XMVector3Cross(u, XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f));
+				// u に最も直交する軸を選んで安定した法線を作る
+				const XMVECTOR axes[] =
+				{
+					rootY,
+					rootZ,
+					XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f),
+					XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f)
+				};
+
+				float bestLenSq = 0.0f;
+				XMVECTOR best = XMVectorZero();
+				for (const XMVECTOR& axis : axes)
+				{
+					XMVECTOR c = XMVector3Cross(u, axis);
+					float lenSq = XMVectorGetX(XMVector3LengthSq(c));
+					if (lenSq > bestLenSq)
+					{
+						bestLenSq = lenSq;
+						best = c;
+					}
+				}
+
+				if (bestLenSq < 1.0e-6f) return false;
+				planeN = best;
 			}
 			planeN = XMVector3Normalize(planeN);
 
-			XMVECTOR poleW = XMLoadFloat4x4(&m_boneStates[rootIdx].globalMatrix).r[2]; // World Z axis of Root
+			XMVECTOR poleW = rootZ;
 
 			// 逆関節(鳥足)設定の場合は反転
 			if (hingeLink.hasLimit)
