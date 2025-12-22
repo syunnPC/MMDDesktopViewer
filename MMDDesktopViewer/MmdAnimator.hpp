@@ -114,6 +114,15 @@ public:
 		pitch = m_lookAtPitch;
 	}
 
+	void SetBreathingEnabled(bool enabled)
+	{
+		m_breathingEnabled = enabled;
+	}
+	bool BreathingEnabled() const
+	{
+		return m_breathingEnabled;
+	}
+
 private:
 	std::unique_ptr<PmxModel> m_model;
 	std::unique_ptr<VmdMotion> m_motion;
@@ -165,4 +174,8 @@ private:
 	float m_nextBlinkInterval{ 3.0f }; // 次のまばたきまでの時間
 
 	void UpdateAutoBlink(double dt);
+
+	bool m_breathingEnabled = false;
+	double m_breathTime = 0.0;
+	void UpdateBreath(double dt);
 };

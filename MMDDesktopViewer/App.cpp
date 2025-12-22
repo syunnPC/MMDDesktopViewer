@@ -29,6 +29,7 @@ namespace
 		CMD_EXIT = 199,
 		CMD_TOGGLE_LOOKAT = 106,
 		CMD_TOGGLE_AUTOBLINK = 107,
+		CMD_TOGGLE_BREATH = 108,
 		CMD_MOTION_BASE = 1000
 	};
 }
@@ -558,6 +559,11 @@ void App::BuildTrayMenu()
 	else blinkFlags |= MF_UNCHECKED;
 	AppendMenuW(motionMenu, blinkFlags, CMD_TOGGLE_AUTOBLINK, L"自動まばたき");
 
+	UINT breathFlags = MF_STRING;
+	if (m_animator && m_animator->BreathingEnabled()) breathFlags |= MF_CHECKED;
+	else breathFlags |= MF_UNCHECKED;
+	AppendMenuW(motionMenu, breathFlags, CMD_TOGGLE_BREATH, L"呼吸モーション (待機時)");
+
 	AppendMenuW(motionMenu, MF_STRING, CMD_STOP_MOTION, L"停止 (リセット)");
 	AppendMenuW(motionMenu, MF_SEPARATOR, 0, nullptr);
 
@@ -776,6 +782,15 @@ void App::OnTrayCommand(UINT id)
 			{
 				bool current = m_animator->AutoBlinkEnabled();
 				m_animator->SetAutoBlinkEnabled(!current);
+				BuildTrayMenu();
+			}
+			break;
+
+		case CMD_TOGGLE_BREATH:
+			if (m_animator)
+			{
+				bool current = m_animator->BreathingEnabled();
+				m_animator->SetBreathingEnabled(!current);
 				BuildTrayMenu();
 			}
 			break;

@@ -47,6 +47,20 @@ namespace
 		float y2 = interp[12] / 127.0f;
 		return EvaluateBezier(t, x1, y1, x2, y2);
 	}
+
+	float ComputeBreathFactor(double t, double period)
+	{
+		const double PI = 3.141592653589793;
+		// 基本周期 (0.0 ~ 1.0)
+		double phase = std::fmod(t, period) / period;
+
+		// sin波を少し歪ませて、吸う(早め)・吐く(ゆっくり)のリズムを作る
+		// sin(x + sin(x)) のような合成で非線形にする
+		double val = std::sin(phase * 2.0 * PI);
+
+		// 0.0 ~ 1.0 に正規化せず、-1.0 ~ 1.0 の変動として返す
+		return static_cast<float>(val);
+	}
 }
 
 MmdAnimator::MmdAnimator()
@@ -237,6 +251,8 @@ void MmdAnimator::Tick(double dtSeconds)
 	m_pose.morphWeights.clear();
 	m_pose.frame = currentFrame;
 
+	bool isMotionActive = (motion != nullptr && !m_paused);
+
 	if (motion)
 	{
 		// --- ボーンアニメーション適用 ---
@@ -366,6 +382,15 @@ void MmdAnimator::Tick(double dtSeconds)
 		}
 	}
 	// ----------------------
+
+	if (!isMotionActive && m_breathingEnabled)
+	{
+		UpdateBreath(dtSeconds);
+	}
+	else if (isMotionActive)
+	{
+		//何かしてもいいけど
+	}
 
 	if (m_lookAtEnabled && m_model)
 	{
@@ -723,4 +748,66 @@ DirectX::XMFLOAT4X4 MmdAnimator::GetBoneGlobalMatrix(const std::wstring& boneNam
 	DirectX::XMFLOAT4X4 identity;
 	DirectX::XMStoreFloat4x4(&identity, DirectX::XMMatrixIdentity());
 	return identity;
+}
+
+void MmdAnimator::UpdateBreath(double dt)
+{
+	m_breathTime += dt;
+
+	// パラメータ設定 (高品質な挙動のための定数)
+	// 呼吸の基本周期: 約3.5秒
+	const double mainPeriod = 3.5;
+	// ゆらぎ周期: 約13秒 (大きくゆっくりした変化)
+	const double slowPeriod = 13.0;
+
+	using namespace DirectX;
+
+	// 1. 基本の呼吸波形 (胸の上下)
+	// sin^3 を使うことで、「吸って、止めて、吐いて、止めて」の緩急をつける
+	double phase = m_breathTime * (2.0 * XM_PI / mainPeriod);
+	float baseWave = std::pow(std::sin(phase), 3.0f); // -1.0 ~ 1.0
+
+	// 2. ゆらぎ成分 (1/fゆらぎ的なゆっくりした変化)
+	float slowWave = std::sin(m_breathTime * (2.0 * XM_PI / slowPeriod));
+
+	// 3. 最終的な強度係数
+	// ゆらぎを少し混ぜて、機械的な繰り返し感を消す
+	float intensity = (baseWave + slowWave * 0.2f) * 0.5f;
+
+	// 各ボーンへの適用
+	auto ApplyBoneRot = [&](const std::wstring& name, float pitch, float yaw, float roll)
+		{
+			// 既存の回転を取得 (LookAtなどで既に設定されている場合があるため合成する)
+			XMVECTOR currentQ = XMQuaternionIdentity();
+			if (m_pose.boneRotations.count(name))
+			{
+				currentQ = XMLoadFloat4(&m_pose.boneRotations[name]);
+			}
+
+			// オイラー角から追加回転を作成 (ラジアン)
+			XMVECTOR addQ = XMQuaternionRotationRollPitchYaw(pitch, yaw, roll);
+
+			// 現在の回転に適用
+			XMVECTOR nextQ = XMQuaternionMultiply(currentQ, addQ);
+			XMStoreFloat4(&m_pose.boneRotations[name], nextQ);
+		};
+
+	// ボーンごとの微調整 (モデルに合わせて微調整してください)
+	// 上半身: 呼吸のメイン。前後にわずかに揺れる (Pitch)
+	// 吸うとき(intensity > 0)に少し反り、吐くときに戻る
+	ApplyBoneRot(L"上半身", intensity * XMConvertToRadians(1.5f), 0.0f, 0.0f);
+
+	// 上半身2: 上半身の動きを増幅または遅延させる
+	// 少し位相をずらすとより有機的になりますが、ここでは単純な連動とします
+	ApplyBoneRot(L"上半身2", intensity * XMConvertToRadians(1.8f), 0.0f, 0.0f);
+
+	// 首・頭: 体の動きに対して少し遅れてバランスを取る (逆位相気味に)
+	// 体が反ると顎を引くような動きを入れると視線が安定する
+	ApplyBoneRot(L"首", intensity * XMConvertToRadians(-0.8f), 0.0f, 0.0f);
+	ApplyBoneRot(L"頭", intensity * XMConvertToRadians(-0.5f), 0.0f, 0.0f);
+
+	// 肩: 吸うときにわずかに上がる (Roll) - Z軸
+	// 左肩(Z+) 右肩(Z-)
+	ApplyBoneRot(L"左肩", 0.0f, 0.0f, intensity * XMConvertToRadians(1.0f));
+	ApplyBoneRot(L"右肩", 0.0f, 0.0f, intensity * XMConvertToRadians(-1.0f));
 }
