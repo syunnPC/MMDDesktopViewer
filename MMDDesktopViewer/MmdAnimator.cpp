@@ -415,6 +415,8 @@ void MmdAnimator::Tick(double dtSeconds)
 		//何かしてもいいけど
 	}
 
+	ApplyAudioReactive(dtSeconds, isMotionActive);
+
 	if (m_lookAtEnabled && m_model)
 	{
 		using namespace DirectX;
@@ -833,4 +835,78 @@ void MmdAnimator::UpdateBreath(double dt)
 	// 左肩(Z+) 右肩(Z-)
 	ApplyBoneRot(L"左肩", 0.0f, 0.0f, intensity * XMConvertToRadians(1.0f));
 	ApplyBoneRot(L"右肩", 0.0f, 0.0f, intensity * XMConvertToRadians(-1.0f));
+}
+
+void MmdAnimator::ApplyAudioReactive(double dt, bool isMotionActive)
+{
+	if (!m_audioReactiveEnabled || !m_audioState.active)
+	{
+		m_audioBeatPhase = 0.0f;
+		return;
+	}
+
+	float bpm = m_audioState.bpm;
+	if (bpm < 1.0f)
+	{
+		bpm = 120.0f;
+	}
+
+	const float phaseSpeed = (bpm / 60.0f) * DirectX::XM_2PI;
+	m_audioBeatPhase += static_cast<float>(dt) * phaseSpeed;
+	if (m_audioBeatPhase > DirectX::XM_2PI)
+	{
+		m_audioBeatPhase = std::fmod(m_audioBeatPhase, DirectX::XM_2PI);
+	}
+
+	const float motionScale = isMotionActive ? 0.35f : 1.0f;
+	ApplyLipSync(m_audioState.mouthOpen);
+	ApplySway(m_audioBeatPhase, m_audioState.beatStrength, motionScale);
+}
+
+void MmdAnimator::ApplyLipSync(float weight)
+{
+	const float w = std::clamp(weight * 1.1f, 0.0f, 1.0f);
+	auto applyMorph = [&](const std::wstring& name, float value)
+		{
+			float current = m_pose.morphWeights[name];
+			m_pose.morphWeights[name] = std::max(current, value);
+		};
+
+	applyMorph(L"あ", w);
+	applyMorph(L"い", w * 0.35f);
+	applyMorph(L"う", w * 0.55f);
+	applyMorph(L"え", w * 0.2f);
+	applyMorph(L"お", w * 0.6f);
+	applyMorph(L"口開け", w);
+	applyMorph(L"口開き", w);
+}
+
+void MmdAnimator::ApplySway(float phase, float strength, float motionScale)
+{
+	const float amplitude = std::clamp(strength, 0.0f, 1.0f);
+	if (amplitude <= 0.001f) return;
+
+	const float yaw = DirectX::XMConvertToRadians(8.0f) * std::sin(phase) * amplitude * motionScale;
+	const float pitch = DirectX::XMConvertToRadians(6.0f) * std::sin(phase * 2.0f) * amplitude * motionScale;
+	const float roll = DirectX::XMConvertToRadians(4.0f) * std::cos(phase * 0.5f) * amplitude * motionScale;
+
+	auto applyRotation = [&](const std::wstring& boneName, float pitchRad, float yawRad, float rollRad, float weight)
+		{
+			using namespace DirectX;
+			XMVECTOR delta = XMQuaternionRotationRollPitchYaw(pitchRad * weight, yawRad * weight, rollRad * weight);
+			XMVECTOR base = XMQuaternionIdentity();
+			auto it = m_pose.boneRotations.find(boneName);
+			if (it != m_pose.boneRotations.end())
+			{
+				base = XMLoadFloat4(&it->second);
+			}
+			XMVECTOR combined = XMQuaternionNormalize(XMQuaternionMultiply(base, delta));
+			XMFLOAT4 out{};
+			XMStoreFloat4(&out, combined);
+			m_pose.boneRotations.insert_or_assign(boneName, out);
+		};
+
+	applyRotation(L"頭", pitch, yaw, roll, 1.0f);
+	applyRotation(L"上半身", pitch * 0.6f, yaw * 0.5f, roll * 0.6f, 1.0f);
+	applyRotation(L"上半身2", pitch * 0.35f, yaw * 0.3f, roll * 0.35f, 1.0f);
 }

@@ -8,6 +8,7 @@
 #include "VmdMotion.hpp"
 #include "BoneSolver.hpp"
 #include "Settings.hpp"
+#include "AudioReactiveState.hpp"
 
 class MmdPhysicsWorld;
 
@@ -111,6 +112,15 @@ public:
 		return m_autoBlinkEnabled;
 	}
 
+	void SetAudioReactiveEnabled(bool enabled)
+	{
+		m_audioReactiveEnabled = enabled;
+	}
+	void SetAudioReactiveState(const AudioReactiveState& state)
+	{
+		m_audioState = state;
+	}
+
 	void GetLookAtState(bool& enabled, float& yaw, float& pitch) const
 	{
 		enabled = m_lookAtEnabled;
@@ -182,4 +192,12 @@ private:
 	bool m_breathingEnabled = false;
 	double m_breathTime = 0.0;
 	void UpdateBreath(double dt);
+
+	void ApplyAudioReactive(double dt, bool isMotionActive);
+	void ApplyLipSync(float weight);
+	void ApplySway(float phase, float strength, float motionScale);
+
+	bool m_audioReactiveEnabled{ false };
+	AudioReactiveState m_audioState{};
+	float m_audioBeatPhase{ 0.0f };
 };

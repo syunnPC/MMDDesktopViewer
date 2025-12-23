@@ -202,6 +202,7 @@
     <ClCompile Include="FileUtil.cpp" />
     <ClCompile Include="GpuResourceManager.cpp" />
     <ClCompile Include="InputManager.cpp" />
+    <ClCompile Include="MediaAudioAnalyzer.cpp" />
     <ClCompile Include="MmdAnimator.cpp" />
     <ClCompile Include="MmdPhysicsWorld.cpp" />
     <ClCompile Include="PmxModel.cpp" />
@@ -218,6 +219,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="App.hpp" />
+    <ClInclude Include="AudioReactiveState.hpp" />
     <ClInclude Include="BinaryReader.hpp" />
     <ClInclude Include="BoneSolver.hpp" />
     <ClInclude Include="Camera.hpp" />
@@ -229,6 +231,7 @@
     <ClInclude Include="FileUtil.hpp" />
     <ClInclude Include="GpuResourceManager.hpp" />
     <ClInclude Include="InputManager.hpp" />
+    <ClInclude Include="MediaAudioAnalyzer.hpp" />
     <ClInclude Include="MmdAnimator.hpp" />
     <ClInclude Include="MmdPhysicsWorld.hpp" />
     <ClInclude Include="PmxModel.hpp" />

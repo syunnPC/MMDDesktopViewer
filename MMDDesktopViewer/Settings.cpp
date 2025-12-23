@@ -322,6 +322,10 @@ AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
 		{
 			settings.globalPresetMode = static_cast<PresetMode>(ParseInt(value, 0));
 		}
+		else if (key == L"mediaReactiveEnabled")
+		{
+			settings.mediaReactiveEnabled = (value == L"1" || value == L"true" || value == L"True");
+		}
 		else if (key.rfind(L"modelPreset_", 0) == 0)
 		{
 			std::wstring filename = key.substr(12); // length of "modelPreset_"
@@ -361,6 +365,7 @@ void SettingsManager::Save(const std::filesystem::path& baseDir,
 	fout << L"windowWidth=" << IntToWString(settings.windowWidth) << L"\n";
 	fout << L"windowHeight=" << IntToWString(settings.windowHeight) << L"\n";
 	fout << L"globalPresetMode=" << IntToWString(static_cast<int>(settings.globalPresetMode)) << L"\n";
+	fout << L"mediaReactiveEnabled=" << (settings.mediaReactiveEnabled ? L"1" : L"0") << L"\n";
 
 	for (const auto& [name, mode] : settings.perModelPresetSettings)
 	{

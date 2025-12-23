@@ -7,6 +7,7 @@
 #include "SettingsWindow.hpp"
 #include "Settings.hpp"
 #include "ProgressWindow.hpp"
+#include "MediaAudioAnalyzer.hpp"
 #include <algorithm>
 #include <format>
 #include <thread>
@@ -30,6 +31,7 @@ namespace
 		CMD_TOGGLE_LOOKAT = 106,
 		CMD_TOGGLE_AUTOBLINK = 107,
 		CMD_TOGGLE_BREATH = 108,
+		CMD_TOGGLE_MEDIA_REACTIVE = 109,
 		CMD_MOTION_BASE = 1000
 	};
 }
@@ -86,6 +88,8 @@ App::App(HINSTANCE hInst)
 
 	InitRenderer();
 	InitAnimator();
+	m_mediaAudio = std::make_unique<MediaAudioAnalyzer>();
+	m_mediaAudio->SetEnabled(m_settingsData.mediaReactiveEnabled);
 
 	BuildTrayMenu();
 	InitTray();
@@ -391,6 +395,10 @@ void App::OnTimer()
 
 	if (m_animator)
 	{
+		if (m_mediaAudio)
+		{
+			m_animator->SetAudioReactiveState(m_mediaAudio->GetState());
+		}
 		m_animator->Update();
 	}
 
@@ -516,6 +524,7 @@ void App::InitAnimator()
 {
 	m_animator = std::make_unique<MmdAnimator>();
 	m_animator->SetPhysicsSettings(m_settingsData.physics);
+	m_animator->SetAudioReactiveEnabled(m_settingsData.mediaReactiveEnabled);
 	LoadModelFromSettings();
 }
 
@@ -568,6 +577,10 @@ void App::BuildTrayMenu()
 	if (m_animator && m_animator->BreathingEnabled()) breathFlags |= MF_CHECKED;
 	else breathFlags |= MF_UNCHECKED;
 	AppendMenuW(motionMenu, breathFlags, CMD_TOGGLE_BREATH, L"呼吸モーション (待機時)");
+
+	UINT mediaFlags = MF_STRING;
+	mediaFlags |= m_settingsData.mediaReactiveEnabled ? MF_CHECKED : MF_UNCHECKED;
+	AppendMenuW(motionMenu, mediaFlags, CMD_TOGGLE_MEDIA_REACTIVE, L"メディア連動 (SMTC/WASAPI)");
 
 	AppendMenuW(motionMenu, MF_STRING, CMD_STOP_MOTION, L"停止 (リセット)");
 	AppendMenuW(motionMenu, MF_SEPARATOR, 0, nullptr);
@@ -674,6 +687,15 @@ void App::ApplySettings(const AppSettings& settings, bool persist)
 	if (m_animator)
 	{
 		m_animator->SetPhysicsSettings(m_settingsData.physics);
+	}
+
+	if (m_mediaAudio)
+	{
+		m_mediaAudio->SetEnabled(m_settingsData.mediaReactiveEnabled);
+	}
+	if (m_animator)
+	{
+		m_animator->SetAudioReactiveEnabled(m_settingsData.mediaReactiveEnabled);
 	}
 
 	if (persist)
@@ -811,6 +833,19 @@ void App::OnTrayCommand(UINT id)
 				m_animator->SetBreathingEnabled(!current);
 				BuildTrayMenu();
 			}
+			break;
+
+		case CMD_TOGGLE_MEDIA_REACTIVE:
+			m_settingsData.mediaReactiveEnabled = !m_settingsData.mediaReactiveEnabled;
+			if (m_mediaAudio)
+			{
+				m_mediaAudio->SetEnabled(m_settingsData.mediaReactiveEnabled);
+			}
+			if (m_animator)
+			{
+				m_animator->SetAudioReactiveEnabled(m_settingsData.mediaReactiveEnabled);
+			}
+			BuildTrayMenu();
 			break;
 
 		case CMD_TOGGLE_WINDOW_MANIP:

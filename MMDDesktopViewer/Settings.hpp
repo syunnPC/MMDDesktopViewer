@@ -171,6 +171,8 @@ struct AppSettings
 	PresetMode globalPresetMode{ PresetMode::Ask };
 	std::map<std::wstring, PresetMode> perModelPresetSettings;
 
+	bool mediaReactiveEnabled{ true };
+
 	LightSettings light;
 	PhysicsSettings physics;
 };

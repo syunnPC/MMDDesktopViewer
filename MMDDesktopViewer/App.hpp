@@ -11,8 +11,10 @@
 #include "Settings.hpp"
 #include "inputManager.hpp"
 #include "WindowManager.hpp"
+#include "AudioReactiveState.hpp"
 
 class SettingsWindow;
+class MediaAudioAnalyzer;
 
 class App
 {
@@ -82,6 +84,7 @@ private:
 
 	std::unique_ptr<DcompRenderer> m_renderer;
 	std::unique_ptr<MmdAnimator> m_animator;
+	std::unique_ptr<MediaAudioAnalyzer> m_mediaAudio;
 
 	InputManager m_input;
 	WindowManager m_windowManager;
