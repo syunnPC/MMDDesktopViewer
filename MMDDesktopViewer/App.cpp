@@ -176,7 +176,7 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 			config.dwFlags = TDF_ENABLE_HYPERLINKS | TDF_ALLOW_DIALOG_CANCELLATION | TDF_USE_COMMAND_LINKS_NO_ICON;
 			config.pszWindowTitle = L"設定の読み込み";
 			config.pszMainInstruction = L"このモデル用の設定プリセットが見つかりました。";
-			config.pszContent = L"保存された照明・表示設定を適用しますか？";
+			config.pszContent = L"保存された表示・ライト・物理設定を適用しますか？";
 
 			TASKDIALOG_BUTTON buttons[] = {
 				{ IDYES, L"読み込む" },
@@ -225,9 +225,13 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 
 		if (doLoad)
 		{
-			if (SettingsManager::LoadPreset(m_baseDir, path, m_settingsData.light))
+			if (SettingsManager::LoadPreset(m_baseDir, path, m_settingsData.light, m_settingsData.physics))
 			{
 				ApplyLightSettings();
+				if (m_animator)
+				{
+					m_animator->SetPhysicsSettings(m_settingsData.physics);
+				}
 				if (m_settings)
 				{
 					m_settings->Refresh();
@@ -511,6 +515,7 @@ void App::InitRenderer()
 void App::InitAnimator()
 {
 	m_animator = std::make_unique<MmdAnimator>();
+	m_animator->SetPhysicsSettings(m_settingsData.physics);
 	LoadModelFromSettings();
 }
 
@@ -666,6 +671,11 @@ void App::ApplySettings(const AppSettings& settings, bool persist)
 		m_renderer->SetLightSettings(m_settingsData.light);
 	}
 
+	if (m_animator)
+	{
+		m_animator->SetPhysicsSettings(m_settingsData.physics);
+	}
+
 	if (persist)
 	{
 		if (!m_settingsData.modelPath.empty())
@@ -683,7 +693,7 @@ void App::ApplySettings(const AppSettings& settings, bool persist)
 
 			if (shouldSavePreset)
 			{
-				SettingsManager::SavePreset(m_baseDir, m_settingsData.modelPath, m_settingsData.light);
+				SettingsManager::SavePreset(m_baseDir, m_settingsData.modelPath, m_settingsData.light, m_settingsData.physics);
 			}
 		}
 	}
@@ -694,6 +704,14 @@ void App::ApplyLightSettings()
 	if (m_renderer)
 	{
 		m_renderer->SetLightSettings(m_settingsData.light);
+	}
+}
+
+void App::ApplyPhysicsSettings()
+{
+	if (m_animator)
+	{
+		m_animator->SetPhysicsSettings(m_settingsData.physics);
 	}
 }
 
@@ -723,7 +741,7 @@ void App::SaveSettings()
 
 		if (shouldSavePreset)
 		{
-			SettingsManager::SavePreset(m_baseDir, m_settingsData.modelPath, m_settingsData.light);
+			SettingsManager::SavePreset(m_baseDir, m_settingsData.modelPath, m_settingsData.light, m_settingsData.physics);
 		}
 	}
 }

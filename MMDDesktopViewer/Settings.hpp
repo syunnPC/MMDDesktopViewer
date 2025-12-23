@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <string>
 #include <map>
+#include <DirectXMath.h>
 
 enum class PresetMode
 {
@@ -57,6 +58,104 @@ struct LightSettings
 	float faceToonContrastMul = 0.9f; // 顔のトゥーン境界の柔らかさ調整
 };
 
+struct PhysicsSettings
+{
+	float fixedTimeStep{ 1.0f / 60.0f };
+
+	int maxSubSteps{ 2 };
+	int maxCatchUpSteps{ 4 };
+
+	DirectX::XMFLOAT3 gravity{ 0.0f, -9.8f, 0.0f };
+	float groundY{ -1000.0f };
+
+	// [FIX] 1.0e-5f -> 0.0f
+	// ここを0.0fにすることで、サブステップ数に関わらず「絶対に伸びない関節」になります。
+	// これがスカートの垂れ下がりと、それに伴う浮遊バグを解決します。
+	float jointCompliance{ 0.0f };
+
+	// 衝突の柔らかさは維持 (爆発防止)
+	float contactCompliance{ 0.001f };
+
+	// [FIX] 0.5f -> 0.0f
+	// 余計な力を持ち越さないようにリセットします。
+	float jointWarmStart{ 0.0f };
+
+	// 揺れ抑制のため 0.0f を維持
+	float postSolveVelocityBlend{ 0.0f };
+	float postSolveAngularVelocityBlend{ 0.0f };
+
+	float maxContactAngularCorrection{ 0.02f };
+
+	bool enableRigidBodyCollisions{ true };
+
+	int collisionGroupMaskSemantics{ 0 };
+	bool collideJointConnectedBodies{ false };
+	bool respectCollisionGroups{ true };
+	bool requireAfterPhysicsFlag{ true };
+
+	// Auto-generate kinematic body colliders (capsules) from the skeleton when the model has
+	// no bone-attached static rigid bodies (i.e. no collision bodies for the character itself).
+	bool generateBodyCollidersIfMissing{ true };
+	int minExistingBodyColliders{ 1 };
+	int maxGeneratedBodyColliders{ 200 };
+
+	float generatedBodyColliderMinBoneLength{ 0.04f };
+	float generatedBodyColliderRadiusRatio{ 0.18f };
+	float generatedBodyColliderMinRadius{ 0.5f };
+	float generatedBodyColliderMaxRadius{ 10.0f };
+
+	// Bones far away from the skeleton centroid are treated as accessories and ignored.
+	float generatedBodyColliderOutlierDistanceFactor{ 1.8f };
+
+	float generatedBodyColliderFriction{ 0.6f };
+	float generatedBodyColliderRestitution{ 0.0f };
+
+	int solverIterations{ 4 };
+	int collisionIterations{ 4 };
+
+	float collisionMargin{ 0.005f };
+
+	// Extra margin applied only in mixed (static vs dynamic) pairs. Default 0 to avoid perpetual contact.
+	float phantomMargin{ 0.0f };
+
+	// Penetration slop: small overlaps are ignored (helps eliminate idle jitter).
+	float contactSlop{ 0.001f };
+
+	// If requireAfterPhysicsFlag==true but the model has no AfterPhysics bones,
+	// fallback write-back mode:
+	//  - true  : only rigid bodies with OperationType::DynamicAndPositionAdjust drive bones (safe default)
+	//  - false : allow all non-static dynamic bodies to drive bones (legacy behavior; may move whole model)
+	bool writebackFallbackPositionAdjustOnly{ true };
+
+	float collisionRadiusScale{ 1.0f };
+
+	float maxLinearSpeed{ 100.0f };
+	float maxAngularSpeed{ 40.0f };
+
+	float maxJointPositionCorrection{ 1.0f };
+	float maxJointAngularCorrection{ 0.15f };
+
+	// 爆発防止のため 2.0f を維持
+	float maxDepenetrationVelocity{ 2.0f };
+
+	float maxSpringCorrectionRate{ 0.4f };
+
+	// [FIX] 0.8f -> 0.4f
+	// 関節が伸びなくなったので、バネ係数は少し下げて「しなやかさ」を出します。
+	// 動きが硬いと感じる場合は、ここを下げてください (0.2~0.4推奨)。
+	float springStiffnessScale{ 0.2f };
+
+	float minLinearDamping{ 0.2f };
+	float minAngularDamping{ 0.2f };
+
+	float maxInvInertia{ 1.0f };
+
+	float sleepLinearSpeed{ 0.0f };
+	float sleepAngularSpeed{ 0.0f };
+
+	float maxInvMass{ 0.0f };
+};
+
 struct AppSettings
 {
 	std::filesystem::path modelPath;
@@ -73,6 +172,7 @@ struct AppSettings
 	std::map<std::wstring, PresetMode> perModelPresetSettings;
 
 	LightSettings light;
+	PhysicsSettings physics;
 };
 
 class SettingsManager
@@ -87,9 +187,15 @@ public:
 	// 指定したモデル用のプリセットが存在するか確認
 	static bool HasPreset(const std::filesystem::path& baseDir, const std::filesystem::path& modelPath);
 
-	// 指定したモデル用のプリセットを保存 (LightSettingsのみ)
-	static void SavePreset(const std::filesystem::path& baseDir, const std::filesystem::path& modelPath, const LightSettings& settings);
+	// 指定したモデル用のプリセットを保存 (LightSettings / PhysicsSettings)
+	static void SavePreset(const std::filesystem::path& baseDir,
+						   const std::filesystem::path& modelPath,
+						   const LightSettings& lightSettings,
+						   const PhysicsSettings& physicsSettings);
 
 	// 指定したモデル用のプリセットを読み込み (存在しなければ false)
-	static bool LoadPreset(const std::filesystem::path& baseDir, const std::filesystem::path& modelPath, LightSettings& outSettings);
+	static bool LoadPreset(const std::filesystem::path& baseDir,
+						   const std::filesystem::path& modelPath,
+						   LightSettings& outLightSettings,
+						   PhysicsSettings& outPhysicsSettings);
 };

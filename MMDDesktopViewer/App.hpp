@@ -36,7 +36,12 @@ public:
 	{
 		return m_settingsData.light;
 	}
+	PhysicsSettings& PhysicsSettingsRef()
+	{
+		return m_settingsData.physics;
+	}
 	void ApplyLightSettings();
+	void ApplyPhysicsSettings();
 	void SaveSettings();
 
 	const std::filesystem::path& ModelsDir() const

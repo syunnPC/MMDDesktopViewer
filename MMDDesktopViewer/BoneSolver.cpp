@@ -267,6 +267,7 @@ void BoneSolver::Initialize(const PmxModel* model)
 	m_inverseBindMatrices.clear();
 	m_boneNameToIndex.clear();
 	m_sortedBoneOrder.clear();
+	m_boneChildren.clear();
 
 	m_lastIkDominantEuler.clear();
 	m_hasLastIkDominantEuler.clear();
@@ -287,6 +288,7 @@ void BoneSolver::Initialize(const PmxModel* model)
 	m_hasLastIkDominantEuler.assign(n, 0);
 	m_lastIkLimitedEuler.assign(n, { 0.0f, 0.0f, 0.0f });
 	m_hasLastIkLimitedEuler.assign(n, 0);
+	m_boneChildren.assign(n, {});
 
 	m_boneNameToIndex.reserve(n);
 	for (size_t i = 0; i < n; ++i)
@@ -301,6 +303,15 @@ void BoneSolver::Initialize(const PmxModel* model)
 
 		DirectX::XMStoreFloat4x4(&m_skinningMatrices[i], DirectX::XMMatrixIdentity());
 		DirectX::XMStoreFloat4x4(&m_inverseBindMatrices[i], DirectX::XMMatrixIdentity());
+	}
+
+	for (size_t i = 0; i < n; ++i)
+	{
+		const int parentIndex = m_bones[i].parentIndex;
+		if (parentIndex >= 0 && parentIndex < static_cast<int>(n))
+		{
+			m_boneChildren[parentIndex].push_back(i);
+		}
 	}
 
 	BuildSortedBoneOrder();
@@ -328,7 +339,11 @@ void BoneSolver::BuildSortedBoneOrder()
 
 void BoneSolver::ApplyPose(const BonePose& pose)
 {
-	for (size_t i = 0; i < m_boneStates.size(); ++i)
+	const int n = static_cast<int>(m_boneStates.size());
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(n >= 256)
+#endif
+	for (int i = 0; i < n; ++i)
 	{
 		m_boneStates[i].localTranslation = { 0.0f, 0.0f, 0.0f };
 		m_boneStates[i].localRotation = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -406,12 +421,9 @@ void BoneSolver::UpdateGlobalMatrixRecursive(size_t boneIndex)
 {
 	UpdateBoneTransform(boneIndex);
 
-	for (size_t i = 0; i < m_bones.size(); ++i)
+	for (size_t childIndex : m_boneChildren[boneIndex])
 	{
-		if (m_bones[i].parentIndex == static_cast<int32_t>(boneIndex))
-		{
-			UpdateGlobalMatrixRecursive(i);
-		}
+		UpdateGlobalMatrixRecursive(childIndex);
 	}
 }
 
@@ -429,7 +441,11 @@ void BoneSolver::CalculateSkinningMatrix(size_t boneIndex)
 
 void BoneSolver::ComputeBindPoseMatrices()
 {
-	for (size_t i = 0; i < m_bones.size(); ++i)
+	const int boneCount = static_cast<int>(m_bones.size());
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(boneCount >= 256)
+#endif
+	for (int i = 0; i < boneCount; ++i)
 	{
 		XMStoreFloat4x4(&m_boneStates[i].localMatrix, XMMatrixIdentity());
 	}
@@ -439,7 +455,10 @@ void BoneSolver::ComputeBindPoseMatrices()
 		CalculateGlobalMatrix(idx);
 	}
 
-	for (size_t i = 0; i < m_bones.size(); ++i)
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(boneCount >= 256)
+#endif
+	for (int i = 0; i < boneCount; ++i)
 	{
 		XMMATRIX bindMat = XMLoadFloat4x4(&m_boneStates[i].globalMatrix);
 		XMMATRIX inv = XMMatrixInverse(nullptr, bindMat);

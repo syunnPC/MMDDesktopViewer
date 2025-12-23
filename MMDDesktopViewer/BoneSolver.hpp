@@ -80,6 +80,7 @@ private:
 	std::unordered_map<std::wstring, size_t> m_boneNameToIndex;
 
 	std::vector<size_t> m_sortedBoneOrder;
+	std::vector<std::vector<size_t>> m_boneChildren;
 
 	void BuildSortedBoneOrder();
 	void UpdateGlobalMatrixRecursive(size_t boneIndex);

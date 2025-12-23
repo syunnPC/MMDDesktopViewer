@@ -7,6 +7,7 @@
 #include <locale>
 #include <system_error>
 #include <sstream>
+#include <cwchar>
 
 namespace
 {
@@ -153,6 +154,123 @@ namespace
 	}
 }
 
+bool ParsePhysicsSettingLine(const std::wstring& key, const std::wstring& value, PhysicsSettings& physics)
+{
+	constexpr wchar_t kPrefix[] = L"physics.";
+	if (key.rfind(kPrefix, 0) != 0)
+	{
+		return false;
+	}
+
+	const size_t prefixLen = wcslen(kPrefix);
+	const std::wstring subKey = key.substr(prefixLen);
+
+	if (subKey == L"fixedTimeStep") physics.fixedTimeStep = ParseFloat(value, physics.fixedTimeStep);
+	else if (subKey == L"maxSubSteps") physics.maxSubSteps = ParseInt(value, physics.maxSubSteps);
+	else if (subKey == L"maxCatchUpSteps") physics.maxCatchUpSteps = ParseInt(value, physics.maxCatchUpSteps);
+	else if (subKey == L"gravityX") physics.gravity.x = ParseFloat(value, physics.gravity.x);
+	else if (subKey == L"gravityY") physics.gravity.y = ParseFloat(value, physics.gravity.y);
+	else if (subKey == L"gravityZ") physics.gravity.z = ParseFloat(value, physics.gravity.z);
+	else if (subKey == L"groundY") physics.groundY = ParseFloat(value, physics.groundY);
+	else if (subKey == L"jointCompliance") physics.jointCompliance = ParseFloat(value, physics.jointCompliance);
+	else if (subKey == L"contactCompliance") physics.contactCompliance = ParseFloat(value, physics.contactCompliance);
+	else if (subKey == L"jointWarmStart") physics.jointWarmStart = ParseFloat(value, physics.jointWarmStart);
+	else if (subKey == L"postSolveVelocityBlend") physics.postSolveVelocityBlend = ParseFloat(value, physics.postSolveVelocityBlend);
+	else if (subKey == L"postSolveAngularVelocityBlend") physics.postSolveAngularVelocityBlend = ParseFloat(value, physics.postSolveAngularVelocityBlend);
+	else if (subKey == L"maxContactAngularCorrection") physics.maxContactAngularCorrection = ParseFloat(value, physics.maxContactAngularCorrection);
+	else if (subKey == L"enableRigidBodyCollisions") physics.enableRigidBodyCollisions = (value == L"1" || value == L"true" || value == L"True");
+	else if (subKey == L"collisionGroupMaskSemantics") physics.collisionGroupMaskSemantics = ParseInt(value, physics.collisionGroupMaskSemantics);
+	else if (subKey == L"collideJointConnectedBodies") physics.collideJointConnectedBodies = (value == L"1" || value == L"true" || value == L"True");
+	else if (subKey == L"respectCollisionGroups") physics.respectCollisionGroups = (value == L"1" || value == L"true" || value == L"True");
+	else if (subKey == L"requireAfterPhysicsFlag") physics.requireAfterPhysicsFlag = (value == L"1" || value == L"true" || value == L"True");
+	else if (subKey == L"generateBodyCollidersIfMissing") physics.generateBodyCollidersIfMissing = (value == L"1" || value == L"true" || value == L"True");
+	else if (subKey == L"minExistingBodyColliders") physics.minExistingBodyColliders = ParseInt(value, physics.minExistingBodyColliders);
+	else if (subKey == L"maxGeneratedBodyColliders") physics.maxGeneratedBodyColliders = ParseInt(value, physics.maxGeneratedBodyColliders);
+	else if (subKey == L"generatedBodyColliderMinBoneLength") physics.generatedBodyColliderMinBoneLength = ParseFloat(value, physics.generatedBodyColliderMinBoneLength);
+	else if (subKey == L"generatedBodyColliderRadiusRatio") physics.generatedBodyColliderRadiusRatio = ParseFloat(value, physics.generatedBodyColliderRadiusRatio);
+	else if (subKey == L"generatedBodyColliderMinRadius") physics.generatedBodyColliderMinRadius = ParseFloat(value, physics.generatedBodyColliderMinRadius);
+	else if (subKey == L"generatedBodyColliderMaxRadius") physics.generatedBodyColliderMaxRadius = ParseFloat(value, physics.generatedBodyColliderMaxRadius);
+	else if (subKey == L"generatedBodyColliderOutlierDistanceFactor") physics.generatedBodyColliderOutlierDistanceFactor = ParseFloat(value, physics.generatedBodyColliderOutlierDistanceFactor);
+	else if (subKey == L"generatedBodyColliderFriction") physics.generatedBodyColliderFriction = ParseFloat(value, physics.generatedBodyColliderFriction);
+	else if (subKey == L"generatedBodyColliderRestitution") physics.generatedBodyColliderRestitution = ParseFloat(value, physics.generatedBodyColliderRestitution);
+	else if (subKey == L"solverIterations") physics.solverIterations = ParseInt(value, physics.solverIterations);
+	else if (subKey == L"collisionIterations") physics.collisionIterations = ParseInt(value, physics.collisionIterations);
+	else if (subKey == L"collisionMargin") physics.collisionMargin = ParseFloat(value, physics.collisionMargin);
+	else if (subKey == L"phantomMargin") physics.phantomMargin = ParseFloat(value, physics.phantomMargin);
+	else if (subKey == L"contactSlop") physics.contactSlop = ParseFloat(value, physics.contactSlop);
+	else if (subKey == L"writebackFallbackPositionAdjustOnly") physics.writebackFallbackPositionAdjustOnly = (value == L"1" || value == L"true" || value == L"True");
+	else if (subKey == L"collisionRadiusScale") physics.collisionRadiusScale = ParseFloat(value, physics.collisionRadiusScale);
+	else if (subKey == L"maxLinearSpeed") physics.maxLinearSpeed = ParseFloat(value, physics.maxLinearSpeed);
+	else if (subKey == L"maxAngularSpeed") physics.maxAngularSpeed = ParseFloat(value, physics.maxAngularSpeed);
+	else if (subKey == L"maxJointPositionCorrection") physics.maxJointPositionCorrection = ParseFloat(value, physics.maxJointPositionCorrection);
+	else if (subKey == L"maxJointAngularCorrection") physics.maxJointAngularCorrection = ParseFloat(value, physics.maxJointAngularCorrection);
+	else if (subKey == L"maxDepenetrationVelocity") physics.maxDepenetrationVelocity = ParseFloat(value, physics.maxDepenetrationVelocity);
+	else if (subKey == L"maxSpringCorrectionRate") physics.maxSpringCorrectionRate = ParseFloat(value, physics.maxSpringCorrectionRate);
+	else if (subKey == L"springStiffnessScale") physics.springStiffnessScale = ParseFloat(value, physics.springStiffnessScale);
+	else if (subKey == L"minLinearDamping") physics.minLinearDamping = ParseFloat(value, physics.minLinearDamping);
+	else if (subKey == L"minAngularDamping") physics.minAngularDamping = ParseFloat(value, physics.minAngularDamping);
+	else if (subKey == L"maxInvInertia") physics.maxInvInertia = ParseFloat(value, physics.maxInvInertia);
+	else if (subKey == L"sleepLinearSpeed") physics.sleepLinearSpeed = ParseFloat(value, physics.sleepLinearSpeed);
+	else if (subKey == L"sleepAngularSpeed") physics.sleepAngularSpeed = ParseFloat(value, physics.sleepAngularSpeed);
+	else if (subKey == L"maxInvMass") physics.maxInvMass = ParseFloat(value, physics.maxInvMass);
+	else return false;
+
+	return true;
+}
+
+void WritePhysicsSettings(std::wostream& os, const PhysicsSettings& physics)
+{
+	constexpr wchar_t kPrefix[] = L"physics.";
+	os << kPrefix << L"fixedTimeStep=" << FloatToWString(physics.fixedTimeStep) << L"\n";
+	os << kPrefix << L"maxSubSteps=" << IntToWString(physics.maxSubSteps) << L"\n";
+	os << kPrefix << L"maxCatchUpSteps=" << IntToWString(physics.maxCatchUpSteps) << L"\n";
+	os << kPrefix << L"gravityX=" << FloatToWString(physics.gravity.x) << L"\n";
+	os << kPrefix << L"gravityY=" << FloatToWString(physics.gravity.y) << L"\n";
+	os << kPrefix << L"gravityZ=" << FloatToWString(physics.gravity.z) << L"\n";
+	os << kPrefix << L"groundY=" << FloatToWString(physics.groundY) << L"\n";
+	os << kPrefix << L"jointCompliance=" << FloatToWString(physics.jointCompliance) << L"\n";
+	os << kPrefix << L"contactCompliance=" << FloatToWString(physics.contactCompliance) << L"\n";
+	os << kPrefix << L"jointWarmStart=" << FloatToWString(physics.jointWarmStart) << L"\n";
+	os << kPrefix << L"postSolveVelocityBlend=" << FloatToWString(physics.postSolveVelocityBlend) << L"\n";
+	os << kPrefix << L"postSolveAngularVelocityBlend=" << FloatToWString(physics.postSolveAngularVelocityBlend) << L"\n";
+	os << kPrefix << L"maxContactAngularCorrection=" << FloatToWString(physics.maxContactAngularCorrection) << L"\n";
+	os << kPrefix << L"enableRigidBodyCollisions=" << (physics.enableRigidBodyCollisions ? L"1" : L"0") << L"\n";
+	os << kPrefix << L"collisionGroupMaskSemantics=" << IntToWString(physics.collisionGroupMaskSemantics) << L"\n";
+	os << kPrefix << L"collideJointConnectedBodies=" << (physics.collideJointConnectedBodies ? L"1" : L"0") << L"\n";
+	os << kPrefix << L"respectCollisionGroups=" << (physics.respectCollisionGroups ? L"1" : L"0") << L"\n";
+	os << kPrefix << L"requireAfterPhysicsFlag=" << (physics.requireAfterPhysicsFlag ? L"1" : L"0") << L"\n";
+	os << kPrefix << L"generateBodyCollidersIfMissing=" << (physics.generateBodyCollidersIfMissing ? L"1" : L"0") << L"\n";
+	os << kPrefix << L"minExistingBodyColliders=" << IntToWString(physics.minExistingBodyColliders) << L"\n";
+	os << kPrefix << L"maxGeneratedBodyColliders=" << IntToWString(physics.maxGeneratedBodyColliders) << L"\n";
+	os << kPrefix << L"generatedBodyColliderMinBoneLength=" << FloatToWString(physics.generatedBodyColliderMinBoneLength) << L"\n";
+	os << kPrefix << L"generatedBodyColliderRadiusRatio=" << FloatToWString(physics.generatedBodyColliderRadiusRatio) << L"\n";
+	os << kPrefix << L"generatedBodyColliderMinRadius=" << FloatToWString(physics.generatedBodyColliderMinRadius) << L"\n";
+	os << kPrefix << L"generatedBodyColliderMaxRadius=" << FloatToWString(physics.generatedBodyColliderMaxRadius) << L"\n";
+	os << kPrefix << L"generatedBodyColliderOutlierDistanceFactor=" << FloatToWString(physics.generatedBodyColliderOutlierDistanceFactor) << L"\n";
+	os << kPrefix << L"generatedBodyColliderFriction=" << FloatToWString(physics.generatedBodyColliderFriction) << L"\n";
+	os << kPrefix << L"generatedBodyColliderRestitution=" << FloatToWString(physics.generatedBodyColliderRestitution) << L"\n";
+	os << kPrefix << L"solverIterations=" << IntToWString(physics.solverIterations) << L"\n";
+	os << kPrefix << L"collisionIterations=" << IntToWString(physics.collisionIterations) << L"\n";
+	os << kPrefix << L"collisionMargin=" << FloatToWString(physics.collisionMargin) << L"\n";
+	os << kPrefix << L"phantomMargin=" << FloatToWString(physics.phantomMargin) << L"\n";
+	os << kPrefix << L"contactSlop=" << FloatToWString(physics.contactSlop) << L"\n";
+	os << kPrefix << L"writebackFallbackPositionAdjustOnly=" << (physics.writebackFallbackPositionAdjustOnly ? L"1" : L"0") << L"\n";
+	os << kPrefix << L"collisionRadiusScale=" << FloatToWString(physics.collisionRadiusScale) << L"\n";
+	os << kPrefix << L"maxLinearSpeed=" << FloatToWString(physics.maxLinearSpeed) << L"\n";
+	os << kPrefix << L"maxAngularSpeed=" << FloatToWString(physics.maxAngularSpeed) << L"\n";
+	os << kPrefix << L"maxJointPositionCorrection=" << FloatToWString(physics.maxJointPositionCorrection) << L"\n";
+	os << kPrefix << L"maxJointAngularCorrection=" << FloatToWString(physics.maxJointAngularCorrection) << L"\n";
+	os << kPrefix << L"maxDepenetrationVelocity=" << FloatToWString(physics.maxDepenetrationVelocity) << L"\n";
+	os << kPrefix << L"maxSpringCorrectionRate=" << FloatToWString(physics.maxSpringCorrectionRate) << L"\n";
+	os << kPrefix << L"springStiffnessScale=" << FloatToWString(physics.springStiffnessScale) << L"\n";
+	os << kPrefix << L"minLinearDamping=" << FloatToWString(physics.minLinearDamping) << L"\n";
+	os << kPrefix << L"minAngularDamping=" << FloatToWString(physics.minAngularDamping) << L"\n";
+	os << kPrefix << L"maxInvInertia=" << FloatToWString(physics.maxInvInertia) << L"\n";
+	os << kPrefix << L"sleepLinearSpeed=" << FloatToWString(physics.sleepLinearSpeed) << L"\n";
+	os << kPrefix << L"sleepAngularSpeed=" << FloatToWString(physics.sleepAngularSpeed) << L"\n";
+	os << kPrefix << L"maxInvMass=" << FloatToWString(physics.maxInvMass) << L"\n";
+}
+
 AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
 								  const std::filesystem::path& defaultModelPath)
 {
@@ -212,7 +330,7 @@ AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
 				settings.perModelPresetSettings[filename] = static_cast<PresetMode>(ParseInt(value, 0));
 			}
 		}
-		else
+		else if (!ParsePhysicsSettingLine(key, value, settings.physics))
 		{
 			ParseLightSettingLine(key, value, settings.light);
 		}
@@ -250,6 +368,7 @@ void SettingsManager::Save(const std::filesystem::path& baseDir,
 	}
 
 	WriteLightSettings(fout, settings.light);
+	WritePhysicsSettings(fout, settings.physics);
 }
 
 bool SettingsManager::HasPreset(const std::filesystem::path& baseDir, const std::filesystem::path& modelPath)
@@ -258,7 +377,10 @@ bool SettingsManager::HasPreset(const std::filesystem::path& baseDir, const std:
 	return !path.empty() && std::filesystem::exists(path);
 }
 
-void SettingsManager::SavePreset(const std::filesystem::path& baseDir, const std::filesystem::path& modelPath, const LightSettings& settings)
+void SettingsManager::SavePreset(const std::filesystem::path& baseDir,
+								 const std::filesystem::path& modelPath,
+								 const LightSettings& lightSettings,
+								 const PhysicsSettings& physicsSettings)
 {
 	auto path = GetPresetPath(baseDir, modelPath);
 	if (path.empty()) return;
@@ -268,10 +390,14 @@ void SettingsManager::SavePreset(const std::filesystem::path& baseDir, const std
 	if (!fout) return;
 
 	fout << L"; Preset for " << modelPath.filename().wstring() << L"\n";
-	WriteLightSettings(fout, settings);
+	WriteLightSettings(fout, lightSettings);
+	WritePhysicsSettings(fout, physicsSettings);
 }
 
-bool SettingsManager::LoadPreset(const std::filesystem::path& baseDir, const std::filesystem::path& modelPath, LightSettings& outSettings)
+bool SettingsManager::LoadPreset(const std::filesystem::path& baseDir,
+								 const std::filesystem::path& modelPath,
+								 LightSettings& outLightSettings,
+								 PhysicsSettings& outPhysicsSettings)
 {
 	auto path = GetPresetPath(baseDir, modelPath);
 	if (path.empty() || !std::filesystem::exists(path)) return false;
@@ -287,7 +413,10 @@ bool SettingsManager::LoadPreset(const std::filesystem::path& baseDir, const std
 		if (pos == std::wstring::npos) continue;
 		auto key = Trim(line.substr(0, pos));
 		auto value = Trim(line.substr(pos + 1));
-		ParseLightSettingLine(key, value, outSettings);
+		if (!ParsePhysicsSettingLine(key, value, outPhysicsSettings))
+		{
+			ParseLightSettingLine(key, value, outLightSettings);
+		}
 	}
 	return true;
 }

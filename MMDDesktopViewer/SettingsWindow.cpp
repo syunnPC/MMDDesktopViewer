@@ -74,6 +74,55 @@ namespace
 	constexpr int ID_FACE_SHADOW_MUL_SLIDER = 151;
 	constexpr int ID_FACE_CONTRAST_MUL_SLIDER = 152;
 
+	constexpr int ID_PHYS_FIXED_TIMESTEP = 300;
+	constexpr int ID_PHYS_MAX_SUBSTEPS = 301;
+	constexpr int ID_PHYS_MAX_CATCHUP = 302;
+	constexpr int ID_PHYS_GRAVITY_X = 303;
+	constexpr int ID_PHYS_GRAVITY_Y = 304;
+	constexpr int ID_PHYS_GRAVITY_Z = 305;
+	constexpr int ID_PHYS_GROUND_Y = 306;
+	constexpr int ID_PHYS_JOINT_COMPLIANCE = 307;
+	constexpr int ID_PHYS_CONTACT_COMPLIANCE = 308;
+	constexpr int ID_PHYS_JOINT_WARMSTART = 309;
+	constexpr int ID_PHYS_POST_SOLVE_VEL_BLEND = 310;
+	constexpr int ID_PHYS_POST_SOLVE_ANG_BLEND = 311;
+	constexpr int ID_PHYS_MAX_CONTACT_ANG_CORR = 312;
+	constexpr int ID_PHYS_ENABLE_RB_COLLISIONS = 313;
+	constexpr int ID_PHYS_COLLISION_GROUP_SEMANTICS = 314;
+	constexpr int ID_PHYS_COLLIDE_JOINT_CONNECTED = 315;
+	constexpr int ID_PHYS_RESPECT_COLLISION_GROUPS = 316;
+	constexpr int ID_PHYS_REQUIRE_AFTER_PHYSICS = 317;
+	constexpr int ID_PHYS_GENERATE_BODY_COLLIDERS = 318;
+	constexpr int ID_PHYS_MIN_EXISTING_COLLIDERS = 319;
+	constexpr int ID_PHYS_MAX_GENERATED_COLLIDERS = 320;
+	constexpr int ID_PHYS_GENERATED_MIN_BONE_LEN = 321;
+	constexpr int ID_PHYS_GENERATED_RADIUS_RATIO = 322;
+	constexpr int ID_PHYS_GENERATED_MIN_RADIUS = 323;
+	constexpr int ID_PHYS_GENERATED_MAX_RADIUS = 324;
+	constexpr int ID_PHYS_GENERATED_OUTLIER_FACTOR = 325;
+	constexpr int ID_PHYS_GENERATED_FRICTION = 326;
+	constexpr int ID_PHYS_GENERATED_RESTITUTION = 327;
+	constexpr int ID_PHYS_SOLVER_ITERATIONS = 328;
+	constexpr int ID_PHYS_COLLISION_ITERATIONS = 329;
+	constexpr int ID_PHYS_COLLISION_MARGIN = 330;
+	constexpr int ID_PHYS_PHANTOM_MARGIN = 331;
+	constexpr int ID_PHYS_CONTACT_SLOP = 332;
+	constexpr int ID_PHYS_WRITEBACK_FALLBACK = 333;
+	constexpr int ID_PHYS_COLLISION_RADIUS_SCALE = 334;
+	constexpr int ID_PHYS_MAX_LINEAR_SPEED = 335;
+	constexpr int ID_PHYS_MAX_ANGULAR_SPEED = 336;
+	constexpr int ID_PHYS_MAX_JOINT_POS_CORR = 337;
+	constexpr int ID_PHYS_MAX_JOINT_ANG_CORR = 338;
+	constexpr int ID_PHYS_MAX_DEPENETRATION = 339;
+	constexpr int ID_PHYS_MAX_SPRING_RATE = 340;
+	constexpr int ID_PHYS_SPRING_STIFFNESS = 341;
+	constexpr int ID_PHYS_MIN_LINEAR_DAMPING = 342;
+	constexpr int ID_PHYS_MIN_ANGULAR_DAMPING = 343;
+	constexpr int ID_PHYS_MAX_INV_INERTIA = 344;
+	constexpr int ID_PHYS_SLEEP_LINEAR_SPEED = 345;
+	constexpr int ID_PHYS_SLEEP_ANGULAR_SPEED = 346;
+	constexpr int ID_PHYS_MAX_INV_MASS = 347;
+
 	constexpr int ID_OK = 200;
 	constexpr int ID_CANCEL = 201;
 	constexpr int ID_APPLY = 202;
@@ -82,6 +131,13 @@ namespace
 	{
 		std::wostringstream oss;
 		oss << std::fixed << std::setprecision(2) << val;
+		return oss.str();
+	}
+
+	std::wstring FormatFloatPrec(float val, int precision)
+	{
+		std::wostringstream oss;
+		oss << std::fixed << std::setprecision(precision) << val;
 		return oss.str();
 	}
 
@@ -97,6 +153,20 @@ namespace
 		try
 		{
 			return std::stoi(buf);
+		}
+		catch (...)
+		{
+			return defaultVal;
+		}
+	}
+
+	float GetEditBoxFloat(HWND hEdit, float defaultVal)
+	{
+		wchar_t buf[64]{};
+		GetWindowTextW(hEdit, buf, static_cast<int>(std::size(buf)));
+		try
+		{
+			return std::stof(buf);
 		}
 		catch (...)
 		{
@@ -215,6 +285,22 @@ void SettingsWindow::CreateControls()
 		return h;
 		};
 
+	auto CreateEdit = [&](int id, int x, int y, int w, bool numeric = false) {
+		DWORD style = WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL;
+		if (numeric) style |= ES_NUMBER;
+		HWND h = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", style, x, y, w, 24, m_hwnd, reinterpret_cast<HMENU>(id), m_hInst, nullptr);
+		SetModernFont(h);
+		SetDarkTheme(h);
+		return h;
+		};
+
+	auto CreateCheck = [&](int id, const wchar_t* text, int x, int y, int w) {
+		HWND h = CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, x, y, w, 24, m_hwnd, reinterpret_cast<HMENU>(id), m_hInst, nullptr);
+		SetModernFont(h);
+		SetDarkTheme(h);
+		return h;
+		};
+
 	// モデルパス
 	CreateLabel(L"モデルパス:", xPadding, y, labelW);
 	m_modelPathEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, xPadding + labelW + 5, y, editW, 24, m_hwnd, reinterpret_cast<HMENU>(ID_MODEL_PATH), m_hInst, nullptr);
@@ -250,7 +336,7 @@ void SettingsWindow::CreateControls()
 	CreateLabel(L"【表示・ライト設定】", xPadding, y, 200); y += 24;
 	CreateLabel(L"モデルサイズ:", xPadding, y, labelW);
 	m_scaleSlider = CreateSlider(ID_SCALE_SLIDER, xPadding + labelW, y, sliderW);
-	SendMessageW(m_scaleSlider, TBM_SETRANGE, TRUE, MAKELONG(10, 500));
+	SendMessageW(m_scaleSlider, TBM_SETRANGE, TRUE, MAKELONG(10, 875));
 	m_scaleLabel = CreateLabel(L"1.00", xPadding + labelW + sliderW + 10, y, 50);
 	y += rowH;
 
@@ -385,6 +471,172 @@ void SettingsWindow::CreateControls()
 	m_fillDirZSlider = CreateSlider(ID_FILL_DIR_Z_SLIDER, xPadding + 300, y, slider3W);
 	SendMessageW(m_fillDirZSlider, TBM_SETRANGE, TRUE, MAKELONG(0, 200));
 	y += rowH + 15;
+
+	// Physics settings
+	const int physicsLabelW = 230;
+	const int physicsEditW = 80;
+
+	CreateLabel(L"【物理演算設定】", xPadding, y, 200); y += 24;
+
+	CreateLabel(L"固定タイムステップ:", xPadding, y, physicsLabelW);
+	m_physicsFixedTimeStepEdit = CreateEdit(ID_PHYS_FIXED_TIMESTEP, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"サブステップ数:", xPadding, y, physicsLabelW);
+	m_physicsMaxSubStepsEdit = CreateEdit(ID_PHYS_MAX_SUBSTEPS, xPadding + physicsLabelW, y, physicsEditW, true);
+	y += rowH;
+
+	CreateLabel(L"キャッチアップ上限:", xPadding, y, physicsLabelW);
+	m_physicsMaxCatchUpStepsEdit = CreateEdit(ID_PHYS_MAX_CATCHUP, xPadding + physicsLabelW, y, physicsEditW, true);
+	y += rowH;
+
+	CreateLabel(L"重力 (X/Y/Z):", xPadding, y, physicsLabelW);
+	m_physicsGravityXEdit = CreateEdit(ID_PHYS_GRAVITY_X, xPadding + physicsLabelW, y, physicsEditW);
+	m_physicsGravityYEdit = CreateEdit(ID_PHYS_GRAVITY_Y, xPadding + physicsLabelW + physicsEditW + 5, y, physicsEditW);
+	m_physicsGravityZEdit = CreateEdit(ID_PHYS_GRAVITY_Z, xPadding + physicsLabelW + (physicsEditW + 5) * 2, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"地面Y:", xPadding, y, physicsLabelW);
+	m_physicsGroundYEdit = CreateEdit(ID_PHYS_GROUND_Y, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"関節コンプライアンス:", xPadding, y, physicsLabelW);
+	m_physicsJointComplianceEdit = CreateEdit(ID_PHYS_JOINT_COMPLIANCE, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"接触コンプライアンス:", xPadding, y, physicsLabelW);
+	m_physicsContactComplianceEdit = CreateEdit(ID_PHYS_CONTACT_COMPLIANCE, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"関節ウォームスタート:", xPadding, y, physicsLabelW);
+	m_physicsJointWarmStartEdit = CreateEdit(ID_PHYS_JOINT_WARMSTART, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"速度/角速度ブレンド:", xPadding, y, physicsLabelW);
+	m_physicsPostSolveVelocityBlendEdit = CreateEdit(ID_PHYS_POST_SOLVE_VEL_BLEND, xPadding + physicsLabelW, y, physicsEditW);
+	m_physicsPostSolveAngularBlendEdit = CreateEdit(ID_PHYS_POST_SOLVE_ANG_BLEND, xPadding + physicsLabelW + physicsEditW + 5, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"最大角補正:", xPadding, y, physicsLabelW);
+	m_physicsMaxContactAngularCorrectionEdit = CreateEdit(ID_PHYS_MAX_CONTACT_ANG_CORR, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	m_physicsEnableRigidBodyCollisionsCheck = CreateCheck(ID_PHYS_ENABLE_RB_COLLISIONS, L"剛体同士の衝突を有効", xPadding, y, 240);
+	y += rowH;
+
+	CreateLabel(L"衝突グループ意味:", xPadding, y, physicsLabelW);
+	m_physicsCollisionGroupMaskSemanticsEdit = CreateEdit(ID_PHYS_COLLISION_GROUP_SEMANTICS, xPadding + physicsLabelW, y, physicsEditW, true);
+	y += rowH;
+
+	m_physicsCollideJointConnectedBodiesCheck = CreateCheck(ID_PHYS_COLLIDE_JOINT_CONNECTED, L"関節で接続された剛体も衝突", xPadding, y, 260);
+	y += rowH;
+
+	m_physicsRespectCollisionGroupsCheck = CreateCheck(ID_PHYS_RESPECT_COLLISION_GROUPS, L"衝突グループを尊重", xPadding, y, 220);
+	y += rowH;
+
+	m_physicsRequireAfterPhysicsFlagCheck = CreateCheck(ID_PHYS_REQUIRE_AFTER_PHYSICS, L"AfterPhysicsボーンのみ反映", xPadding, y, 260);
+	y += rowH;
+
+	m_physicsWritebackFallbackCheck = CreateCheck(ID_PHYS_WRITEBACK_FALLBACK, L"AfterPhysics未検出時は位置補正のみ", xPadding, y, 320);
+	y += rowH;
+
+	m_physicsGenerateBodyCollidersCheck = CreateCheck(ID_PHYS_GENERATE_BODY_COLLIDERS, L"自動ボディコライダー生成", xPadding, y, 260);
+	y += rowH;
+
+	CreateLabel(L"既存ボディ最小数:", xPadding, y, physicsLabelW);
+	m_physicsMinExistingBodyCollidersEdit = CreateEdit(ID_PHYS_MIN_EXISTING_COLLIDERS, xPadding + physicsLabelW, y, physicsEditW, true);
+	y += rowH;
+
+	CreateLabel(L"生成ボディ最大数:", xPadding, y, physicsLabelW);
+	m_physicsMaxGeneratedBodyCollidersEdit = CreateEdit(ID_PHYS_MAX_GENERATED_COLLIDERS, xPadding + physicsLabelW, y, physicsEditW, true);
+	y += rowH;
+
+	CreateLabel(L"ボーン長最小:", xPadding, y, physicsLabelW);
+	m_physicsGeneratedMinBoneLengthEdit = CreateEdit(ID_PHYS_GENERATED_MIN_BONE_LEN, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"半径比率:", xPadding, y, physicsLabelW);
+	m_physicsGeneratedRadiusRatioEdit = CreateEdit(ID_PHYS_GENERATED_RADIUS_RATIO, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"半径最小/最大:", xPadding, y, physicsLabelW);
+	m_physicsGeneratedMinRadiusEdit = CreateEdit(ID_PHYS_GENERATED_MIN_RADIUS, xPadding + physicsLabelW, y, physicsEditW);
+	m_physicsGeneratedMaxRadiusEdit = CreateEdit(ID_PHYS_GENERATED_MAX_RADIUS, xPadding + physicsLabelW + physicsEditW + 5, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"外れ値距離係数:", xPadding, y, physicsLabelW);
+	m_physicsGeneratedOutlierDistanceFactorEdit = CreateEdit(ID_PHYS_GENERATED_OUTLIER_FACTOR, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"生成摩擦/反発:", xPadding, y, physicsLabelW);
+	m_physicsGeneratedFrictionEdit = CreateEdit(ID_PHYS_GENERATED_FRICTION, xPadding + physicsLabelW, y, physicsEditW);
+	m_physicsGeneratedRestitutionEdit = CreateEdit(ID_PHYS_GENERATED_RESTITUTION, xPadding + physicsLabelW + physicsEditW + 5, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"ソルバ反復数:", xPadding, y, physicsLabelW);
+	m_physicsSolverIterationsEdit = CreateEdit(ID_PHYS_SOLVER_ITERATIONS, xPadding + physicsLabelW, y, physicsEditW, true);
+	y += rowH;
+
+	CreateLabel(L"衝突反復数:", xPadding, y, physicsLabelW);
+	m_physicsCollisionIterationsEdit = CreateEdit(ID_PHYS_COLLISION_ITERATIONS, xPadding + physicsLabelW, y, physicsEditW, true);
+	y += rowH;
+
+	CreateLabel(L"衝突マージン:", xPadding, y, physicsLabelW);
+	m_physicsCollisionMarginEdit = CreateEdit(ID_PHYS_COLLISION_MARGIN, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"ファントムマージン:", xPadding, y, physicsLabelW);
+	m_physicsPhantomMarginEdit = CreateEdit(ID_PHYS_PHANTOM_MARGIN, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"接触スロップ:", xPadding, y, physicsLabelW);
+	m_physicsContactSlopEdit = CreateEdit(ID_PHYS_CONTACT_SLOP, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"衝突半径スケール:", xPadding, y, physicsLabelW);
+	m_physicsCollisionRadiusScaleEdit = CreateEdit(ID_PHYS_COLLISION_RADIUS_SCALE, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"最大線/角速度:", xPadding, y, physicsLabelW);
+	m_physicsMaxLinearSpeedEdit = CreateEdit(ID_PHYS_MAX_LINEAR_SPEED, xPadding + physicsLabelW, y, physicsEditW);
+	m_physicsMaxAngularSpeedEdit = CreateEdit(ID_PHYS_MAX_ANGULAR_SPEED, xPadding + physicsLabelW + physicsEditW + 5, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"関節補正(位置/角):", xPadding, y, physicsLabelW);
+	m_physicsMaxJointPositionCorrectionEdit = CreateEdit(ID_PHYS_MAX_JOINT_POS_CORR, xPadding + physicsLabelW, y, physicsEditW);
+	m_physicsMaxJointAngularCorrectionEdit = CreateEdit(ID_PHYS_MAX_JOINT_ANG_CORR, xPadding + physicsLabelW + physicsEditW + 5, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"最大押し戻し速度:", xPadding, y, physicsLabelW);
+	m_physicsMaxDepenetrationVelocityEdit = CreateEdit(ID_PHYS_MAX_DEPENETRATION, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"ばね補正率:", xPadding, y, physicsLabelW);
+	m_physicsMaxSpringCorrectionRateEdit = CreateEdit(ID_PHYS_MAX_SPRING_RATE, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"ばね剛性倍率:", xPadding, y, physicsLabelW);
+	m_physicsSpringStiffnessScaleEdit = CreateEdit(ID_PHYS_SPRING_STIFFNESS, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"最小減衰(線/角):", xPadding, y, physicsLabelW);
+	m_physicsMinLinearDampingEdit = CreateEdit(ID_PHYS_MIN_LINEAR_DAMPING, xPadding + physicsLabelW, y, physicsEditW);
+	m_physicsMinAngularDampingEdit = CreateEdit(ID_PHYS_MIN_ANGULAR_DAMPING, xPadding + physicsLabelW + physicsEditW + 5, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"最大逆慣性:", xPadding, y, physicsLabelW);
+	m_physicsMaxInvInertiaEdit = CreateEdit(ID_PHYS_MAX_INV_INERTIA, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"スリープ速度(線/角):", xPadding, y, physicsLabelW);
+	m_physicsSleepLinearSpeedEdit = CreateEdit(ID_PHYS_SLEEP_LINEAR_SPEED, xPadding + physicsLabelW, y, physicsEditW);
+	m_physicsSleepAngularSpeedEdit = CreateEdit(ID_PHYS_SLEEP_ANGULAR_SPEED, xPadding + physicsLabelW + physicsEditW + 5, y, physicsEditW);
+	y += rowH;
+
+	CreateLabel(L"最大逆質量:", xPadding, y, physicsLabelW);
+	m_physicsMaxInvMassEdit = CreateEdit(ID_PHYS_MAX_INV_MASS, xPadding + physicsLabelW, y, physicsEditW);
+	y += rowH + 15;
+
 
 	m_resetLightBtn = CreateWindowExW(0, L"BUTTON", L"ライト設定をリセット", WS_CHILD | WS_VISIBLE, xPadding, y, 160, 30, m_hwnd, reinterpret_cast<HMENU>(ID_RESET_LIGHT), m_hInst, nullptr);
 	SetModernFont(m_resetLightBtn); SetDarkTheme(m_resetLightBtn);
@@ -544,6 +796,56 @@ void SettingsWindow::LoadCurrentSettings()
 	SendMessageW(m_fillDirYSlider, TBM_SETPOS, TRUE, static_cast<int>((light.fillLightDirY + 1.0f) * 100));
 	SendMessageW(m_fillDirZSlider, TBM_SETPOS, TRUE, static_cast<int>((light.fillLightDirZ + 1.0f) * 100));
 
+	const auto& physics = settings.physics;
+	SetWindowTextW(m_physicsFixedTimeStepEdit, FormatFloatPrec(physics.fixedTimeStep, 5).c_str());
+	SetWindowTextW(m_physicsMaxSubStepsEdit, std::to_wstring(physics.maxSubSteps).c_str());
+	SetWindowTextW(m_physicsMaxCatchUpStepsEdit, std::to_wstring(physics.maxCatchUpSteps).c_str());
+	SetWindowTextW(m_physicsGravityXEdit, FormatFloatPrec(physics.gravity.x, 4).c_str());
+	SetWindowTextW(m_physicsGravityYEdit, FormatFloatPrec(physics.gravity.y, 4).c_str());
+	SetWindowTextW(m_physicsGravityZEdit, FormatFloatPrec(physics.gravity.z, 4).c_str());
+	SetWindowTextW(m_physicsGroundYEdit, FormatFloatPrec(physics.groundY, 4).c_str());
+	SetWindowTextW(m_physicsJointComplianceEdit, FormatFloatPrec(physics.jointCompliance, 5).c_str());
+	SetWindowTextW(m_physicsContactComplianceEdit, FormatFloatPrec(physics.contactCompliance, 5).c_str());
+	SetWindowTextW(m_physicsJointWarmStartEdit, FormatFloatPrec(physics.jointWarmStart, 5).c_str());
+	SetWindowTextW(m_physicsPostSolveVelocityBlendEdit, FormatFloatPrec(physics.postSolveVelocityBlend, 4).c_str());
+	SetWindowTextW(m_physicsPostSolveAngularBlendEdit, FormatFloatPrec(physics.postSolveAngularVelocityBlend, 4).c_str());
+	SetWindowTextW(m_physicsMaxContactAngularCorrectionEdit, FormatFloatPrec(physics.maxContactAngularCorrection, 4).c_str());
+	SendMessageW(m_physicsEnableRigidBodyCollisionsCheck, BM_SETCHECK, physics.enableRigidBodyCollisions ? BST_CHECKED : BST_UNCHECKED, 0);
+	SetWindowTextW(m_physicsCollisionGroupMaskSemanticsEdit, std::to_wstring(physics.collisionGroupMaskSemantics).c_str());
+	SendMessageW(m_physicsCollideJointConnectedBodiesCheck, BM_SETCHECK, physics.collideJointConnectedBodies ? BST_CHECKED : BST_UNCHECKED, 0);
+	SendMessageW(m_physicsRespectCollisionGroupsCheck, BM_SETCHECK, physics.respectCollisionGroups ? BST_CHECKED : BST_UNCHECKED, 0);
+	SendMessageW(m_physicsRequireAfterPhysicsFlagCheck, BM_SETCHECK, physics.requireAfterPhysicsFlag ? BST_CHECKED : BST_UNCHECKED, 0);
+	SendMessageW(m_physicsWritebackFallbackCheck, BM_SETCHECK, physics.writebackFallbackPositionAdjustOnly ? BST_CHECKED : BST_UNCHECKED, 0);
+	SendMessageW(m_physicsGenerateBodyCollidersCheck, BM_SETCHECK, physics.generateBodyCollidersIfMissing ? BST_CHECKED : BST_UNCHECKED, 0);
+	SetWindowTextW(m_physicsMinExistingBodyCollidersEdit, std::to_wstring(physics.minExistingBodyColliders).c_str());
+	SetWindowTextW(m_physicsMaxGeneratedBodyCollidersEdit, std::to_wstring(physics.maxGeneratedBodyColliders).c_str());
+	SetWindowTextW(m_physicsGeneratedMinBoneLengthEdit, FormatFloatPrec(physics.generatedBodyColliderMinBoneLength, 4).c_str());
+	SetWindowTextW(m_physicsGeneratedRadiusRatioEdit, FormatFloatPrec(physics.generatedBodyColliderRadiusRatio, 4).c_str());
+	SetWindowTextW(m_physicsGeneratedMinRadiusEdit, FormatFloatPrec(physics.generatedBodyColliderMinRadius, 4).c_str());
+	SetWindowTextW(m_physicsGeneratedMaxRadiusEdit, FormatFloatPrec(physics.generatedBodyColliderMaxRadius, 4).c_str());
+	SetWindowTextW(m_physicsGeneratedOutlierDistanceFactorEdit, FormatFloatPrec(physics.generatedBodyColliderOutlierDistanceFactor, 4).c_str());
+	SetWindowTextW(m_physicsGeneratedFrictionEdit, FormatFloatPrec(physics.generatedBodyColliderFriction, 4).c_str());
+	SetWindowTextW(m_physicsGeneratedRestitutionEdit, FormatFloatPrec(physics.generatedBodyColliderRestitution, 4).c_str());
+	SetWindowTextW(m_physicsSolverIterationsEdit, std::to_wstring(physics.solverIterations).c_str());
+	SetWindowTextW(m_physicsCollisionIterationsEdit, std::to_wstring(physics.collisionIterations).c_str());
+	SetWindowTextW(m_physicsCollisionMarginEdit, FormatFloatPrec(physics.collisionMargin, 5).c_str());
+	SetWindowTextW(m_physicsPhantomMarginEdit, FormatFloatPrec(physics.phantomMargin, 5).c_str());
+	SetWindowTextW(m_physicsContactSlopEdit, FormatFloatPrec(physics.contactSlop, 5).c_str());
+	SetWindowTextW(m_physicsCollisionRadiusScaleEdit, FormatFloatPrec(physics.collisionRadiusScale, 4).c_str());
+	SetWindowTextW(m_physicsMaxLinearSpeedEdit, FormatFloatPrec(physics.maxLinearSpeed, 3).c_str());
+	SetWindowTextW(m_physicsMaxAngularSpeedEdit, FormatFloatPrec(physics.maxAngularSpeed, 3).c_str());
+	SetWindowTextW(m_physicsMaxJointPositionCorrectionEdit, FormatFloatPrec(physics.maxJointPositionCorrection, 4).c_str());
+	SetWindowTextW(m_physicsMaxJointAngularCorrectionEdit, FormatFloatPrec(physics.maxJointAngularCorrection, 4).c_str());
+	SetWindowTextW(m_physicsMaxDepenetrationVelocityEdit, FormatFloatPrec(physics.maxDepenetrationVelocity, 4).c_str());
+	SetWindowTextW(m_physicsMaxSpringCorrectionRateEdit, FormatFloatPrec(physics.maxSpringCorrectionRate, 4).c_str());
+	SetWindowTextW(m_physicsSpringStiffnessScaleEdit, FormatFloatPrec(physics.springStiffnessScale, 4).c_str());
+	SetWindowTextW(m_physicsMinLinearDampingEdit, FormatFloatPrec(physics.minLinearDamping, 4).c_str());
+	SetWindowTextW(m_physicsMinAngularDampingEdit, FormatFloatPrec(physics.minAngularDamping, 4).c_str());
+	SetWindowTextW(m_physicsMaxInvInertiaEdit, FormatFloatPrec(physics.maxInvInertia, 4).c_str());
+	SetWindowTextW(m_physicsSleepLinearSpeedEdit, FormatFloatPrec(physics.sleepLinearSpeed, 4).c_str());
+	SetWindowTextW(m_physicsSleepAngularSpeedEdit, FormatFloatPrec(physics.sleepAngularSpeed, 4).c_str());
+	SetWindowTextW(m_physicsMaxInvMassEdit, FormatFloatPrec(physics.maxInvMass, 4).c_str());
+
 	UpdateLightPreview();
 	InvalidateRect(m_hwnd, nullptr, TRUE);
 }
@@ -648,6 +950,57 @@ void SettingsWindow::ApplyAndSave()
 	if (sel >= 0) newSettings.globalPresetMode = static_cast<PresetMode>(sel);
 
 	newSettings.light = m_app.LightSettingsRef();
+	auto& physics = newSettings.physics;
+
+	physics.fixedTimeStep = std::max(0.0001f, GetEditBoxFloat(m_physicsFixedTimeStepEdit, physics.fixedTimeStep));
+	physics.maxSubSteps = std::max(1, GetEditBoxInt(m_physicsMaxSubStepsEdit, physics.maxSubSteps));
+	physics.maxCatchUpSteps = std::max(0, GetEditBoxInt(m_physicsMaxCatchUpStepsEdit, physics.maxCatchUpSteps));
+	physics.gravity.x = GetEditBoxFloat(m_physicsGravityXEdit, physics.gravity.x);
+	physics.gravity.y = GetEditBoxFloat(m_physicsGravityYEdit, physics.gravity.y);
+	physics.gravity.z = GetEditBoxFloat(m_physicsGravityZEdit, physics.gravity.z);
+	physics.groundY = GetEditBoxFloat(m_physicsGroundYEdit, physics.groundY);
+	physics.jointCompliance = std::max(0.0f, GetEditBoxFloat(m_physicsJointComplianceEdit, physics.jointCompliance));
+	physics.contactCompliance = std::max(0.0f, GetEditBoxFloat(m_physicsContactComplianceEdit, physics.contactCompliance));
+	physics.jointWarmStart = std::max(0.0f, GetEditBoxFloat(m_physicsJointWarmStartEdit, physics.jointWarmStart));
+	physics.postSolveVelocityBlend = std::max(0.0f, GetEditBoxFloat(m_physicsPostSolveVelocityBlendEdit, physics.postSolveVelocityBlend));
+	physics.postSolveAngularVelocityBlend = std::max(0.0f, GetEditBoxFloat(m_physicsPostSolveAngularBlendEdit, physics.postSolveAngularVelocityBlend));
+	physics.maxContactAngularCorrection = std::max(0.0f, GetEditBoxFloat(m_physicsMaxContactAngularCorrectionEdit, physics.maxContactAngularCorrection));
+	physics.enableRigidBodyCollisions = (SendMessageW(m_physicsEnableRigidBodyCollisionsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+	physics.collisionGroupMaskSemantics = GetEditBoxInt(m_physicsCollisionGroupMaskSemanticsEdit, physics.collisionGroupMaskSemantics);
+	physics.collideJointConnectedBodies = (SendMessageW(m_physicsCollideJointConnectedBodiesCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+	physics.respectCollisionGroups = (SendMessageW(m_physicsRespectCollisionGroupsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+	physics.requireAfterPhysicsFlag = (SendMessageW(m_physicsRequireAfterPhysicsFlagCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+	physics.writebackFallbackPositionAdjustOnly = (SendMessageW(m_physicsWritebackFallbackCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+	physics.generateBodyCollidersIfMissing = (SendMessageW(m_physicsGenerateBodyCollidersCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+	physics.minExistingBodyColliders = std::max(0, GetEditBoxInt(m_physicsMinExistingBodyCollidersEdit, physics.minExistingBodyColliders));
+	physics.maxGeneratedBodyColliders = std::max(0, GetEditBoxInt(m_physicsMaxGeneratedBodyCollidersEdit, physics.maxGeneratedBodyColliders));
+	physics.generatedBodyColliderMinBoneLength = std::max(0.0f, GetEditBoxFloat(m_physicsGeneratedMinBoneLengthEdit, physics.generatedBodyColliderMinBoneLength));
+	physics.generatedBodyColliderRadiusRatio = std::max(0.0f, GetEditBoxFloat(m_physicsGeneratedRadiusRatioEdit, physics.generatedBodyColliderRadiusRatio));
+	physics.generatedBodyColliderMinRadius = std::max(0.0f, GetEditBoxFloat(m_physicsGeneratedMinRadiusEdit, physics.generatedBodyColliderMinRadius));
+	physics.generatedBodyColliderMaxRadius = std::max(0.0f, GetEditBoxFloat(m_physicsGeneratedMaxRadiusEdit, physics.generatedBodyColliderMaxRadius));
+	physics.generatedBodyColliderOutlierDistanceFactor = std::max(0.0f, GetEditBoxFloat(m_physicsGeneratedOutlierDistanceFactorEdit, physics.generatedBodyColliderOutlierDistanceFactor));
+	physics.generatedBodyColliderFriction = std::max(0.0f, GetEditBoxFloat(m_physicsGeneratedFrictionEdit, physics.generatedBodyColliderFriction));
+	physics.generatedBodyColliderRestitution = std::max(0.0f, GetEditBoxFloat(m_physicsGeneratedRestitutionEdit, physics.generatedBodyColliderRestitution));
+	physics.solverIterations = std::max(0, GetEditBoxInt(m_physicsSolverIterationsEdit, physics.solverIterations));
+	physics.collisionIterations = std::max(0, GetEditBoxInt(m_physicsCollisionIterationsEdit, physics.collisionIterations));
+	physics.collisionMargin = std::max(0.0f, GetEditBoxFloat(m_physicsCollisionMarginEdit, physics.collisionMargin));
+	physics.phantomMargin = std::max(0.0f, GetEditBoxFloat(m_physicsPhantomMarginEdit, physics.phantomMargin));
+	physics.contactSlop = std::max(0.0f, GetEditBoxFloat(m_physicsContactSlopEdit, physics.contactSlop));
+	physics.collisionRadiusScale = std::max(0.0f, GetEditBoxFloat(m_physicsCollisionRadiusScaleEdit, physics.collisionRadiusScale));
+	physics.maxLinearSpeed = std::max(0.0f, GetEditBoxFloat(m_physicsMaxLinearSpeedEdit, physics.maxLinearSpeed));
+	physics.maxAngularSpeed = std::max(0.0f, GetEditBoxFloat(m_physicsMaxAngularSpeedEdit, physics.maxAngularSpeed));
+	physics.maxJointPositionCorrection = std::max(0.0f, GetEditBoxFloat(m_physicsMaxJointPositionCorrectionEdit, physics.maxJointPositionCorrection));
+	physics.maxJointAngularCorrection = std::max(0.0f, GetEditBoxFloat(m_physicsMaxJointAngularCorrectionEdit, physics.maxJointAngularCorrection));
+	physics.maxDepenetrationVelocity = std::max(0.0f, GetEditBoxFloat(m_physicsMaxDepenetrationVelocityEdit, physics.maxDepenetrationVelocity));
+	physics.maxSpringCorrectionRate = std::max(0.0f, GetEditBoxFloat(m_physicsMaxSpringCorrectionRateEdit, physics.maxSpringCorrectionRate));
+	physics.springStiffnessScale = std::max(0.0f, GetEditBoxFloat(m_physicsSpringStiffnessScaleEdit, physics.springStiffnessScale));
+	physics.minLinearDamping = std::max(0.0f, GetEditBoxFloat(m_physicsMinLinearDampingEdit, physics.minLinearDamping));
+	physics.minAngularDamping = std::max(0.0f, GetEditBoxFloat(m_physicsMinAngularDampingEdit, physics.minAngularDamping));
+	physics.maxInvInertia = std::max(0.0f, GetEditBoxFloat(m_physicsMaxInvInertiaEdit, physics.maxInvInertia));
+	physics.sleepLinearSpeed = std::max(0.0f, GetEditBoxFloat(m_physicsSleepLinearSpeedEdit, physics.sleepLinearSpeed));
+	physics.sleepAngularSpeed = std::max(0.0f, GetEditBoxFloat(m_physicsSleepAngularSpeedEdit, physics.sleepAngularSpeed));
+	physics.maxInvMass = std::max(0.0f, GetEditBoxFloat(m_physicsMaxInvMassEdit, physics.maxInvMass));
+
 
 	m_app.ApplySettings(newSettings, true);
 	m_backupSettings = m_app.Settings();
@@ -770,8 +1123,8 @@ LRESULT SettingsWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 					}
 					else
 					{
-						SettingsManager::SavePreset(m_app.BaseDir(), settings.modelPath, settings.light);
-						MessageBoxW(m_hwnd, L"現在のライト設定をモデル用プリセットとして保存しました。", L"保存完了", MB_ICONINFORMATION);
+						SettingsManager::SavePreset(m_app.BaseDir(), settings.modelPath, settings.light, settings.physics);
+						MessageBoxW(m_hwnd, L"現在のライト/物理設定をモデル用プリセットとして保存しました。", L"保存完了", MB_ICONINFORMATION);
 					}
 					return 0;
 				}
@@ -783,10 +1136,11 @@ LRESULT SettingsWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 					}
 					else
 					{
-						if (SettingsManager::LoadPreset(m_app.BaseDir(), settings.modelPath, m_app.LightSettingsRef()))
+						if (SettingsManager::LoadPreset(m_app.BaseDir(), settings.modelPath, m_app.LightSettingsRef(), m_app.PhysicsSettingsRef()))
 						{
 							LoadCurrentSettings(); // UI反映
 							m_app.ApplyLightSettings();
+							m_app.ApplyPhysicsSettings();
 							MessageBoxW(m_hwnd, L"プリセットを読み込みました。", L"完了", MB_ICONINFORMATION);
 						}
 						else
@@ -827,11 +1181,31 @@ LRESULT SettingsWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 		}
 
 		case WM_CLOSE:
-			m_app.ApplySettings(m_backupSettings, false);
-			Hide();
+		{
+			const int result = MessageBoxW(
+				m_hwnd,
+				L"設定を適用して閉じますか？",
+				L"確認",
+				MB_YESNOCANCEL | MB_ICONQUESTION);
+
+			if (result == IDYES)
+			{
+				ApplyAndSave();
+				Hide();
+				return 0;
+			}
+			if (result == IDNO)
+			{
+				m_app.ApplySettings(m_backupSettings, false);
+				LoadCurrentSettings();
+				Hide();
+				return 0;
+			}
 			return 0;
+		}
 
 		default: break;
 	}
+
 	return DefWindowProcW(hWnd, msg, wParam, lParam);
 }

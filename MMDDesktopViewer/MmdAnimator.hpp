@@ -7,6 +7,7 @@
 #include "PmxModel.hpp"
 #include "VmdMotion.hpp"
 #include "BoneSolver.hpp"
+#include "Settings.hpp"
 
 class MmdPhysicsWorld;
 
@@ -54,6 +55,9 @@ public:
 	{
 		m_physicsEnabled = !m_physicsEnabled;
 	}
+
+	void SetPhysicsSettings(const PhysicsSettings& settings);
+	const PhysicsSettings& GetPhysicsSettings() const;
 
 	// --- LookAt 機能 ---
 	void SetLookAtState(bool enabled, float yaw, float pitch);

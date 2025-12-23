@@ -12,14 +12,17 @@ namespace
 	float NormalizeFrame(float frame, float maxFrame)
 	{
 		if (maxFrame <= 0.0f) return frame;
-		float cycle = maxFrame;
-		while (frame >= cycle) frame -= cycle;
-		while (frame < 0.0f) frame += cycle;
+		const float cycle = maxFrame;
+		frame = std::fmod(frame, cycle);
+		if (frame < 0.0f) frame += cycle;
 		return frame;
 	}
 
 	float EvaluateBezier(float t, float x1, float y1, float x2, float y2)
 	{
+		if (t <= 0.0f) return 0.0f;
+		if (t >= 1.0f) return 1.0f;
+
 		auto cubic = [](float p0, float p1, float p2, float p3, float s) {
 			float inv = 1.0f - s;
 			return inv * inv * inv * p0 + 3.0f * inv * inv * s * p1 + 3.0f * inv * s * s * p2 + s * s * s * p3;
@@ -209,6 +212,20 @@ void MmdAnimator::CacheLookAtBones()
 	}
 }
 
+void MmdAnimator::SetPhysicsSettings(const PhysicsSettings& settings)
+{
+	if (!m_physicsWorld) return;
+
+	m_physicsWorld->GetSettings() = settings;
+	m_physicsWorld->Reset();
+}
+
+const PhysicsSettings& MmdAnimator::GetPhysicsSettings() const
+{
+	static PhysicsSettings fallback{};
+	return m_physicsWorld ? m_physicsWorld->GetSettings() : fallback;
+}
+
 void MmdAnimator::Tick(double dtSeconds)
 {
 	if (!m_paused)
@@ -258,6 +275,10 @@ void MmdAnimator::Tick(double dtSeconds)
 		// --- ボーンアニメーション適用 ---
 		const auto& boneTracks = motion->BoneTracks();
 		const size_t numBoneTracks = boneTracks.size();
+		m_pose.boneTranslations.reserve(numBoneTracks);
+		m_pose.boneRotations.reserve(numBoneTracks);
+		auto& poseTranslations = m_pose.boneTranslations;
+		auto& poseRotations = m_pose.boneRotations;
 
 		for (size_t i = 0; i < numBoneTracks; ++i)
 		{
@@ -318,13 +339,15 @@ void MmdAnimator::Tick(double dtSeconds)
 				trans.x = 0.0f; trans.z = 0.0f;
 			}
 
-			m_pose.boneTranslations[track.name] = trans;
-			m_pose.boneRotations[track.name] = rot;
+			poseTranslations.insert_or_assign(track.name, trans);
+			poseRotations.insert_or_assign(track.name, rot);
 		}
 
 		// --- モーフアニメーション適用 ---
 		const auto& morphTracks = motion->MorphTracks();
 		const size_t numMorphTracks = morphTracks.size();
+		m_pose.morphWeights.reserve(numMorphTracks);
+		auto& poseMorphs = m_pose.morphWeights;
 
 		for (size_t i = 0; i < numMorphTracks; ++i)
 		{
@@ -354,7 +377,7 @@ void MmdAnimator::Tick(double dtSeconds)
 			}
 
 			float w = k0.weight + (k1->weight - k0.weight) * t;
-			m_pose.morphWeights[track.name] = w;
+			poseMorphs.insert_or_assign(track.name, w);
 		}
 	}
 
