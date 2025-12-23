@@ -24,7 +24,9 @@ public:
 
 private:
 	static LRESULT CALLBACK WndProcThunk(HWND, UINT, WPARAM, LPARAM);
+	static LRESULT CALLBACK ContentProcThunk(HWND, UINT, WPARAM, LPARAM);
 	LRESULT WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+	LRESULT ContentProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 	void CreateControls();
 	void LoadCurrentSettings();
@@ -33,22 +35,46 @@ private:
 	void PickColor(float& r, float& g, float& b, HWND btnHwnd);
 	void UpdateFpsControlState();
 
+	void SetHeaderFont(HWND hChild);
 	void SetModernFont(HWND hChild);
 	void SetDarkTheme(HWND hChild);
 
 	void UpdateScrollInfo();
 	void OnVScroll(WPARAM wParam);
 	void OnMouseWheel(int delta);
+	void ScrollTo(int targetY);
+	void UpdateNavHighlightFromScroll();
+	bool HasUnsavedChanges() const;
 
 	App& m_app;
 	HINSTANCE m_hInst;
 	HWND m_hwnd{};
+	HWND m_tabs{};
+	HWND m_content{};
+	HWND m_footerDivider{};
 
 	HFONT m_hFont{ nullptr };
+	HFONT m_hHeaderFont{ nullptr };
 	HBRUSH m_darkBrush{ nullptr };
+	HWND m_tooltip{};
+
+	// サイズ変更(縦のみ許可)
+	int m_fixedWindowWidth{ 0 };
 
 	int m_totalContentHeight{ 0 };
 	int m_scrollY{ 0 };
+	int m_lastAutoNavIndex{ -1 };
+	int m_sectionYBasic{ 0 };
+	int m_sectionYLight{ 0 };
+	int m_sectionYToon{ 0 };
+	int m_sectionYPhysics{ 0 };
+
+	int m_headerHeight{ 52 };
+	int m_footerHeight{ 58 };
+	int m_anchorBasicY{ 0 };
+	int m_anchorLightY{ 0 };
+	int m_anchorToonY{ 0 };
+	int m_anchorPhysicsY{ 0 };
 
 	// 基本設定
 	HWND m_modelPathEdit{};
