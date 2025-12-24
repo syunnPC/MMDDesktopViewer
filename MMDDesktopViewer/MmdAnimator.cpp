@@ -850,6 +850,7 @@ void MmdAnimator::ApplyAudioReactive(double dt, bool isMotionActive)
 		m_audioBeatPhase = 0.0f;
 		m_audioPhaseSpeed = smoothTowards(m_audioPhaseSpeed, 0.0f, 6.0f);
 		m_audioStrengthFiltered = smoothTowards(m_audioStrengthFiltered, 0.0f, 6.0f);
+		m_audioMouthFiltered = smoothTowards(m_audioMouthFiltered, 0.0f, 10.0f);
 		return;
 	}
 
@@ -880,14 +881,22 @@ void MmdAnimator::ApplyAudioReactive(double dt, bool isMotionActive)
 		std::clamp(m_audioState.beatStrength, 0.0f, 1.0f),
 		5.0f);
 
+	const float mouthTarget = std::clamp(m_audioState.mouthOpen, 0.0f, 1.0f);
+	const float mouthRate = mouthTarget > m_audioMouthFiltered ? 14.0f : 9.0f;
+	m_audioMouthFiltered = smoothTowards(m_audioMouthFiltered, mouthTarget, mouthRate);
+	const float shapedMouth = std::pow(std::clamp(m_audioMouthFiltered, 0.0f, 1.0f), 0.92f);
+
 	const float motionScale = isMotionActive ? 0.25f : 0.65f;
-	ApplyLipSync(m_audioState.mouthOpen);
-	ApplySway(m_audioBeatPhase, m_audioStrengthFiltered, motionScale);
+	ApplyLipSync(shapedMouth);
+
+	const float expressiveStrength = std::clamp((m_audioStrengthFiltered * 0.85f) + (m_audioMouthFiltered * 0.35f), 0.0f, 1.0f);
+	ApplySway(m_audioBeatPhase, expressiveStrength, motionScale);
 }
 
 void MmdAnimator::ApplyLipSync(float weight)
 {
-	const float w = std::clamp(weight * 1.1f, 0.0f, 1.0f);
+	float w = std::clamp(weight * 1.1f, 0.0f, 1.0f);
+	w = std::clamp(w * (0.65f + 0.35f * w), 0.0f, 1.0f);
 	auto applyMorph = [&](const std::wstring& name, float value)
 		{
 			float current = m_pose.morphWeights[name];
@@ -905,7 +914,8 @@ void MmdAnimator::ApplyLipSync(float weight)
 
 void MmdAnimator::ApplySway(float phase, float strength, float motionScale)
 {
-	const float amplitude = std::clamp(strength, 0.0f, 1.0f) * motionScale;
+	const float easedStrength = std::clamp(strength, 0.0f, 1.0f) * (0.6f + 0.4f * std::clamp(strength, 0.0f, 1.0f));
+	const float amplitude = easedStrength * motionScale;
 	if (amplitude <= 0.001f) return;
 
 	const float pitch = DirectX::XMConvertToRadians(10.0f) * std::sin(phase) * amplitude;

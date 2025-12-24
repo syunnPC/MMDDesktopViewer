@@ -33,6 +33,11 @@ namespace
 	constexpr int kFftSize = 1024;
 	constexpr double kBeatMinIntervalSeconds = 0.25;
 	constexpr double kBeatEnergyThreshold = 1.35;
+	// 音量に依存しない「無音判定」のための最小 RMS。
+	// ループバックでゼロ埋めされる環境ではこれより十分大きい。
+	constexpr double kMinSilenceGateRms = 5e-9;
+	// 口パクの自動ゲイン制御が目標とする RMS（-28dBFS 相当）
+	constexpr double kAgcTargetRms = 0.04;
 	constexpr DWORD kCaptureWaitMs = 150;
 	constexpr auto kSessionPollInterval = std::chrono::milliseconds(500);
 
@@ -122,6 +127,29 @@ namespace
 		return std::clamp(v, 0.0f, 1.0f);
 	}
 }
+
+struct MediaAudioAnalyzer::GsmtcCache
+{
+	winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager manager{ nullptr };
+
+	bool EnsureManager()
+	{
+		if (manager)
+		{
+			return true;
+		}
+		try
+		{
+			manager = winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+			return static_cast<bool>(manager);
+		}
+		catch (const winrt::hresult_error&)
+		{
+			manager = nullptr;
+			return false;
+		}
+	}
+};
 
 MediaAudioAnalyzer::MediaAudioAnalyzer()
 {
@@ -840,7 +868,7 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 			std::fill(floatBuffer.begin(), floatBuffer.end(), 0.0f);
 		}
 
-		// 取り込めているかの統計（1秒に1回だけログ）
+		// 取り込めているかの統計（1秒に1回だけログ用のピーク）
 		{
 			const size_t checkN = std::min<size_t>(floatBuffer.size(), 4096);
 			for (size_t i = 0; i < checkN; ++i)
@@ -848,13 +876,16 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 				float a = std::abs(floatBuffer[i]);
 				if (a > maxAbs) maxAbs = a;
 			}
-			if (maxAbs > 1e-6f) anyNonSilent = true;
 		}
 
 		auto now = std::chrono::steady_clock::now();
 		double timeSeconds = std::chrono::duration<double>(now - m_captureStart).count();
 
 		m_analyzer.Process(floatBuffer.data(), frames, sampleRate, channels, timeSeconds);
+		if (m_analyzer.LastHadAudio())
+		{
+			anyNonSilent = true;
+		}
 		{
 			std::scoped_lock lock(m_stateMutex);
 			m_state = m_analyzer.State();
@@ -910,6 +941,10 @@ void MediaAudioAnalyzer::AudioAnalyzer::Reset(double sampleRate, int channels)
 	m_mouth = 0.0;
 	m_beatStrength = 0.0;
 	m_bassEnergy = 0.0;
+	m_rmsAvg = 0.0;
+	m_noiseRms = 1e-9;
+	m_agcGain = 1.0;
+	m_lastHadAudio = false;
 	m_fftBuffer.assign(kFftSize, 0.0f);
 	m_window.resize(kFftSize);
 	for (int i = 0; i < kFftSize; ++i)
@@ -939,19 +974,48 @@ void MediaAudioAnalyzer::AudioAnalyzer::Process(const float* samples, size_t fra
 	}
 
 	energy /= static_cast<double>(frames);
+	const double rms = std::sqrt(std::max(0.0, energy));
+
+	// 無音判定（固定閾値ではなく、環境ノイズの移動平均に基づいて判定する）
+	const double gate = std::max(m_noiseRms * 4.0, kMinSilenceGateRms);
+	const bool hasAudio = (rms > gate);
+	m_lastHadAudio = hasAudio;
+
+	// ノイズ推定（音が無いときのみ追従させる）
+	if (!hasAudio)
+	{
+		m_noiseRms = (m_noiseRms * 0.995) + (rms * 0.005);
+		m_noiseRms = std::clamp(m_noiseRms, 0.0, 1.0);
+	}
+
+	// エネルギー平均（BPM/ビート検知用）。音量が小さくても追従できるように、
+	// 値そのものが小さいことを理由に打ち切らない。
 	m_energyAvg = (m_energyAvg * 0.98) + (energy * 0.02);
+
+	// 口パクの自動ゲイン制御（AGC）。
+	// 小音量でも同程度の反応になるように、平均 RMS に対してゲインを調整する。
+	if (hasAudio)
+	{
+		m_rmsAvg = (m_rmsAvg * 0.995) + (rms * 0.005);
+		const double denom = std::max(m_rmsAvg, 1e-12);
+		double targetGain = kAgcTargetRms / denom;
+		targetGain = std::clamp(targetGain, 1.0, 200.0);
+		m_agcGain = (m_agcGain * 0.90) + (targetGain * 0.10);
+		m_agcGain = std::clamp(m_agcGain, 1.0, 200.0);
+	}
 
 	UpdateBeat(energy, timeSeconds);
 	UpdateSpectral();
 
-	double mouthTarget = std::sqrt(energy) * 3.5;
+	// AGC 後の RMS で口パクを駆動（音量に依存しにくい）
+	double mouthTarget = hasAudio ? (rms * m_agcGain * 4.0) : 0.0;
 	m_mouth = (m_mouth * 0.85) + (mouthTarget * 0.15);
 	m_mouth = std::clamp(m_mouth, 0.0, 1.0);
 }
 
 void MediaAudioAnalyzer::AudioAnalyzer::UpdateBeat(double energy, double timeSeconds)
 {
-	if (m_energyAvg <= 1e-6) return;
+	if (m_energyAvg <= 1e-12) return;
 
 	double ratio = energy / m_energyAvg;
 	double spectralBoost = std::clamp(m_bassEnergy * 0.15, 0.0, 0.5);
@@ -1015,18 +1079,22 @@ void MediaAudioAnalyzer::AudioAnalyzer::UpdateSpectral()
 		}
 	}
 
+	// 音量に依存しないよう、低域成分を「全体に対する比率」で追跡する。
 	double bassSum = 0.0;
-	int bassBins = 0;
-	for (int i = 1; i < 6; ++i)
+	double totalSum = 0.0;
+	for (int i = 1; i < 128; ++i)
 	{
 		double mag = std::abs(fft[i]);
-		bassSum += mag;
-		bassBins++;
+		totalSum += mag;
+		if (i < 6)
+		{
+			bassSum += mag;
+		}
 	}
-	if (bassBins > 0)
+	if (totalSum > 0.0)
 	{
-		double bass = bassSum / static_cast<double>(bassBins);
-		m_bassEnergy = (m_bassEnergy * 0.8) + (bass * 0.2);
+		double bassRatio = bassSum / totalSum;
+		m_bassEnergy = (m_bassEnergy * 0.8) + (bassRatio * 0.2);
 	}
 }
 

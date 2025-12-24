@@ -7,6 +7,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <memory>
 #include <wrl/client.h>
 #include <mmeapi.h>
 #include "AudioReactiveState.hpp"
@@ -14,6 +15,7 @@
 struct IAudioClient;
 struct IAudioCaptureClient;
 struct IMMDevice;
+struct IMMDeviceEnumerator;
 
 class MediaAudioAnalyzer
 {
@@ -46,12 +48,18 @@ private:
 		std::optional<uint32_t> pid;
 	};
 
+	struct GsmtcCache;
+
 	class AudioAnalyzer
 	{
 	public:
 		void Reset(double sampleRate, int channels);
 		void Process(const float* samples, size_t frames, double sampleRate, int channels, double timeSeconds);
 		AudioReactiveState State() const;
+		bool LastHadAudio() const
+		{
+			return m_lastHadAudio;
+		}
 
 	private:
 		void UpdateBeat(double energy, double timeSeconds);
@@ -63,6 +71,10 @@ private:
 		double m_mouth{ 0.0 };
 		double m_beatStrength{ 0.0 };
 		double m_bassEnergy{ 0.0 };
+		double m_rmsAvg{ 0.0 };
+		double m_noiseRms{ 1e-9 };
+		double m_agcGain{ 1.0 };
+		bool m_lastHadAudio{ false };
 
 		std::vector<float> m_fftBuffer;
 		std::vector<float> m_window;
@@ -72,6 +84,7 @@ private:
 	void WorkerLoop(std::stop_token stopToken);
 	MediaSessionInfo QuerySession();
 	std::optional<uint32_t> ResolveProcessId(const std::wstring& aumid);
+	bool EnsureDeviceEnumerator();
 	bool EnsureCaptureForTarget(const CaptureTarget& target);
 	bool StartProcessLoopback(uint32_t pid);
 	bool StartSystemLoopback();
@@ -87,6 +100,9 @@ private:
 	AudioAnalyzer m_analyzer{};
 
 	std::jthread m_worker;
+
+	Microsoft::WRL::ComPtr<IMMDeviceEnumerator> m_deviceEnumerator;
+	std::unique_ptr<GsmtcCache> m_gsmtc;
 
 	Microsoft::WRL::ComPtr<IAudioClient> m_audioClient;
 	Microsoft::WRL::ComPtr<IAudioCaptureClient> m_captureClient;
