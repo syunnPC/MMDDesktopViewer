@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <memory>
 #include <filesystem>
+#include <string>
 #include <vector>
 #include <atomic>
 #include "ProgressWindow.hpp"
@@ -73,6 +74,7 @@ private:
 	void UpdateTimerInterval();
 	UINT ComputeTimerIntervalMs() const;
 	void LoadModelFromSettings();
+	void ShowNotification(const std::wstring& title, const std::wstring& message) const;
 
 	void OnTrayCommand(UINT id);
 	void OnTimer();

@@ -19,6 +19,7 @@ void TrayIcon::Show(const wchar_t* tooltip)
 	m_nid.cbSize = sizeof(m_nid);
 	m_nid.hWnd = m_owner;
 	m_nid.uID = m_id;
+
 	m_nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
 	m_nid.uCallbackMessage = m_callbackMsg;
 	m_nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
@@ -31,6 +32,14 @@ void TrayIcon::Show(const wchar_t* tooltip)
 	if (!Shell_NotifyIconW(NIM_ADD, &m_nid))
 	{
 		throw std::runtime_error("Shell_NotifyIconW(NIM_ADD) failed.");
+	}
+
+	m_nid.uVersion = NOTIFYICON_VERSION_4;
+	if (!Shell_NotifyIconW(NIM_SETVERSION, &m_nid))
+	{
+#ifdef _DEBUG
+		OutputDebugStringW(L"Failed to set NOTIFYICON_VERSION_4.\r\n");
+#endif
 	}
 
 	m_visible = true;
@@ -75,4 +84,16 @@ void TrayIcon::ShowContextMenu() const
 		pt.x, pt.y, 0, m_owner, nullptr
 	);
 	PostMessageW(m_owner, WM_NULL, 0, 0);
+}
+
+void TrayIcon::ShowBalloon(const wchar_t* title, const wchar_t* message, DWORD infoFlags) const
+{
+	if (!m_visible) return;
+
+	NOTIFYICONDATAW nid = m_nid;
+	nid.uFlags |= NIF_INFO;
+	wcsncpy_s(nid.szInfoTitle, title ? title : L"", _countof(nid.szInfoTitle) - 1);
+	wcsncpy_s(nid.szInfo, message ? message : L"", _countof(nid.szInfo) - 1);
+	nid.dwInfoFlags = infoFlags;
+	Shell_NotifyIconW(NIM_MODIFY, &nid);
 }

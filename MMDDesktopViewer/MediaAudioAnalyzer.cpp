@@ -125,6 +125,7 @@ namespace
 
 MediaAudioAnalyzer::MediaAudioAnalyzer()
 {
+	m_lastNonSilentAudio = std::chrono::steady_clock::now();
 	m_worker = std::jthread([&](std::stop_token token) { WorkerLoop(token); });
 }
 
@@ -164,6 +165,12 @@ AudioReactiveState MediaAudioAnalyzer::GetState() const
 	return m_state;
 }
 
+bool MediaAudioAnalyzer::ConsumeDrmWarning()
+{
+	return m_drmWarningPending.exchange(false, std::memory_order_acq_rel);
+}
+
+
 void MediaAudioAnalyzer::WorkerLoop(std::stop_token stopToken)
 {
 	winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -181,6 +188,7 @@ void MediaAudioAnalyzer::WorkerLoop(std::stop_token stopToken)
 				std::scoped_lock lock(m_stateMutex);
 				m_state.active = false;
 			}
+			m_lastNonSilentAudio = std::chrono::steady_clock::now();
 			std::this_thread::sleep_for(std::chrono::milliseconds(200));
 			continue;
 		}
@@ -210,6 +218,7 @@ void MediaAudioAnalyzer::WorkerLoop(std::stop_token stopToken)
 				std::scoped_lock lock(m_stateMutex);
 				m_state.active = false;
 			}
+			m_lastNonSilentAudio = std::chrono::steady_clock::now();
 			std::this_thread::sleep_for(std::chrono::milliseconds(100));
 			continue;
 		}
@@ -524,6 +533,7 @@ bool MediaAudioAnalyzer::StartProcessLoopback(uint32_t pid)
 
 	m_analyzer.Reset(static_cast<double>(m_mixFormat->nSamplesPerSec), static_cast<int>(m_mixFormat->nChannels));
 	m_captureStart = std::chrono::steady_clock::now();
+	m_lastNonSilentAudio = m_captureStart;
 
 	hr = m_audioClient->Start();
 	if (FAILED(hr))
@@ -625,6 +635,7 @@ bool MediaAudioAnalyzer::StartSystemLoopback()
 
 	m_analyzer.Reset(static_cast<double>(m_mixFormat->nSamplesPerSec), static_cast<int>(m_mixFormat->nChannels));
 	m_captureStart = std::chrono::steady_clock::now();
+	m_lastNonSilentAudio = m_captureStart;
 
 	hr = m_audioClient->Start();
 	if (FAILED(hr))
@@ -871,6 +882,21 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 		}
 	}
 #endif
+
+	const auto now = std::chrono::steady_clock::now();
+	if (anyNonSilent)
+	{
+		m_lastNonSilentAudio = now;
+	}
+	else if (anyPacket && m_currentTarget.active && m_currentTarget.eligible)
+	{
+		const auto silentDuration = now - m_lastNonSilentAudio;
+		if (silentDuration > std::chrono::seconds(3) && !m_drmWarningSent.load(std::memory_order_acquire))
+		{
+			m_drmWarningPending.store(true, std::memory_order_release);
+			m_drmWarningSent.store(true, std::memory_order_release);
+		}
+	}
 
 	// データが来ていないだけなら「成功」とする
 	return true;

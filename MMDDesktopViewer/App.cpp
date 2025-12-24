@@ -14,6 +14,8 @@
 #include <stdexcept>
 #include <string>
 #include <cmath>
+#include <shellapi.h>
+#include <ShObjIdl_core.h>
 
 namespace
 {
@@ -63,6 +65,8 @@ App::App(HINSTANCE hInst)
 	{
 		throw std::runtime_error("CoInitializeEx failed.");
 	}
+
+	SetCurrentProcessExplicitAppUserModelID(L"MMDDesk");
 
 	m_baseDir = FileUtil::GetExecutableDir();
 	m_modelsDir = m_baseDir / L"Models";
@@ -398,6 +402,10 @@ void App::OnTimer()
 		if (m_mediaAudio)
 		{
 			const auto st = m_mediaAudio->GetState();
+			if (m_mediaAudio->ConsumeDrmWarning())
+			{
+				ShowNotification(L"音声を取得できません", L"DRM保護されたアプリからは音声を取得できません。別のアプリや再生方法をご利用ください。");
+			}
 
 #if _DEBUG
 
@@ -498,6 +506,18 @@ void App::AdjustBrightness(float delta)
 void App::RenderGizmo()
 {
 	m_windowManager.RenderGizmo();
+}
+
+void App::ShowNotification(const std::wstring& title, const std::wstring& message) const
+{
+	if (m_tray)
+	{
+		m_tray->ShowBalloon(title.c_str(), message.c_str(), NIIF_WARNING);
+		return;
+	}
+
+	HWND owner = m_windowManager.RenderWindow();
+	MessageBoxW(owner ? owner : nullptr, message.c_str(), title.c_str(), MB_ICONWARNING | MB_OK);
 }
 
 void App::InitRenderer()

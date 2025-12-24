@@ -28,6 +28,7 @@ public:
 	bool Enabled() const;
 
 	AudioReactiveState GetState() const;
+	bool ConsumeDrmWarning();
 
 private:
 	struct MediaSessionInfo
@@ -78,6 +79,8 @@ private:
 	bool CaptureAudioOnce(std::stop_token stopToken);
 
 	std::atomic<bool> m_enabled{ true };
+	std::atomic<bool> m_drmWarningPending{ false };
+	std::atomic<bool> m_drmWarningSent{ false };
 
 	mutable std::mutex m_stateMutex;
 	AudioReactiveState m_state{};
@@ -92,4 +95,5 @@ private:
 	HANDLE m_captureEvent{ nullptr };
 	CaptureTarget m_currentTarget{};
 	std::chrono::steady_clock::time_point m_captureStart{};
+	std::chrono::steady_clock::time_point m_lastNonSilentAudio{};
 };

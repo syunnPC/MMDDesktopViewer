@@ -200,4 +200,7 @@ private:
 	bool m_audioReactiveEnabled{ false };
 	AudioReactiveState m_audioState{};
 	float m_audioBeatPhase{ 0.0f };
+	float m_audioBpmFiltered{ 0.0f };
+	float m_audioPhaseSpeed{ 0.0f };
+	float m_audioStrengthFiltered{ 0.0f };
 };
