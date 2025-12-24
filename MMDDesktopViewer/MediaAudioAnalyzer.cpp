@@ -1,4 +1,4 @@
-#include "MediaAudioAnalyzer.hpp"
+﻿#include "MediaAudioAnalyzer.hpp"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -9,6 +9,7 @@
 #include <audioclientactivationparams.h>
 #include <audiopolicy.h>
 #include <mmdeviceapi.h>
+#include <ksmedia.h>
 #include <appmodel.h>
 #include <winrt/base.h>
 #include <winrt/Windows.Media.Control.h>
@@ -18,6 +19,9 @@
 #include <cmath>
 #include <complex>
 #include <algorithm>
+#include <format>
+#include <cstdint>
+#include <cstring>
 
 #pragma comment(lib, "Mmdevapi.lib")
 #pragma comment(lib, "mincore.lib")
@@ -32,14 +36,64 @@ namespace
 	constexpr DWORD kCaptureWaitMs = 150;
 	constexpr auto kSessionPollInterval = std::chrono::milliseconds(500);
 
+#ifdef _DEBUG
+	void DebugHr(const wchar_t* where, HRESULT hr)
+	{
+		if (FAILED(hr))
+		{
+			OutputDebugStringW(std::format(L"[Audio] {} hr=0x{:08X}\r\n", where ? where : L"(null)", static_cast<uint32_t>(hr)).c_str());
+		}
+	}
+#else
+	void DebugHr(const wchar_t*, HRESULT)
+	{
+	}
+#endif
+
+	bool TryGetExtensibleFields(const WAVEFORMATEX* format, WORD& outValidBits, DWORD& outChannelMask, GUID& outSubFormat)
+	{
+		outValidBits = 0;
+		outChannelMask = 0;
+		outSubFormat = GUID{};
+
+		if (!format) return false;
+		if (format->wFormatTag != WAVE_FORMAT_EXTENSIBLE) return false;
+		if (format->cbSize < 22) return false;
+
+		// WAVEFORMATEX の「拡張領域」は cbSize 分だけ、WAVEFORMATEX の末尾（18バイト）直後に連結される。
+		// ここで sizeof(WAVEFORMATEX) を使うと、コンパイラの末尾パディング（例: 20バイト）に引きずられて
+		// オフセットがズレることがあるため、固定 18 バイトを基準にする。
+		constexpr size_t kWfxWireSize = 18;
+
+		const uint8_t* p = reinterpret_cast<const uint8_t*>(format);
+
+		WORD validBits = 0;
+		DWORD mask = 0;
+		GUID sub{};
+		memcpy(&validBits, p + kWfxWireSize, sizeof(WORD));
+		memcpy(&mask, p + kWfxWireSize + sizeof(WORD), sizeof(DWORD));
+		memcpy(&sub, p + kWfxWireSize + sizeof(WORD) + sizeof(DWORD), sizeof(GUID));
+
+		outValidBits = validBits;
+		outChannelMask = mask;
+		outSubFormat = sub;
+		return true;
+	}
+
 	bool IsFloatFormat(const WAVEFORMATEX* format)
 	{
 		if (!format) return false;
 		if (format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) return true;
+
 		if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
 		{
-			const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
-			return extensible->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+			WORD validBits = 0;
+			DWORD mask = 0;
+			GUID sub{};
+			if (TryGetExtensibleFields(format, validBits, mask, sub))
+			{
+				return ::IsEqualGUID(sub, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+			}
 		}
 		return false;
 	}
@@ -48,13 +102,20 @@ namespace
 	{
 		if (!format) return false;
 		if (format->wFormatTag == WAVE_FORMAT_PCM) return true;
+
 		if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
 		{
-			const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
-			return extensible->SubFormat == KSDATAFORMAT_SUBTYPE_PCM;
+			WORD validBits = 0;
+			DWORD mask = 0;
+			GUID sub{};
+			if (TryGetExtensibleFields(format, validBits, mask, sub))
+			{
+				return ::IsEqualGUID(sub, KSDATAFORMAT_SUBTYPE_PCM);
+			}
 		}
 		return false;
 	}
+
 
 	float Clamp01(float v)
 	{
@@ -64,7 +125,7 @@ namespace
 
 MediaAudioAnalyzer::MediaAudioAnalyzer()
 {
-	m_worker = std::jthread([this](std::stop_token token) { WorkerLoop(token); });
+	m_worker = std::jthread([&](std::stop_token token) { WorkerLoop(token); });
 }
 
 MediaAudioAnalyzer::~MediaAudioAnalyzer()
@@ -105,7 +166,7 @@ AudioReactiveState MediaAudioAnalyzer::GetState() const
 
 void MediaAudioAnalyzer::WorkerLoop(std::stop_token stopToken)
 {
-	winrt::init_apartment(winrt::apartment_type::single_threaded);
+	winrt::init_apartment(winrt::apartment_type::multi_threaded);
 	m_captureStart = std::chrono::steady_clock::now();
 
 	auto nextPoll = std::chrono::steady_clock::now();
@@ -188,9 +249,23 @@ MediaAudioAnalyzer::MediaSessionInfo MediaAudioAnalyzer::QuerySession()
 		}
 
 		auto mediaProps = session.TryGetMediaPropertiesAsync().get();
-		auto mediaType = mediaProps.PlaybackType();
-		const bool eligible = (static_cast<winrt::Windows::Media::MediaPlaybackType>(mediaType.GetInt32()) == winrt::Windows::Media::MediaPlaybackType::Music ||
-							   static_cast<winrt::Windows::Media::MediaPlaybackType>(mediaType.GetInt32()) == winrt::Windows::Media::MediaPlaybackType::Video);
+		auto typeRef = mediaProps.PlaybackType(); // IReference<MediaPlaybackType> (null あり)
+		auto v = typeRef ? typeRef.Value() : winrt::Windows::Media::MediaPlaybackType::Unknown;
+		const int32_t type = static_cast<int32_t>(v);
+
+		const bool eligible =
+			(v == winrt::Windows::Media::MediaPlaybackType::Music) ||
+			(v == winrt::Windows::Media::MediaPlaybackType::Video) ||
+			(v == winrt::Windows::Media::MediaPlaybackType::Unknown);
+
+#ifdef _DEBUG
+
+		if (eligible)
+		{
+			OutputDebugStringW(std::format(L"Eligible media playback type {}\r\n", type).c_str());
+		}
+
+#endif
 
 		info.active = true;
 		info.eligible = eligible;
@@ -203,73 +278,87 @@ MediaAudioAnalyzer::MediaSessionInfo MediaAudioAnalyzer::QuerySession()
 	return info;
 }
 
+
 std::optional<uint32_t> MediaAudioAnalyzer::ResolveProcessId(const std::wstring& aumid)
 {
 	if (aumid.empty()) return std::nullopt;
 
 	ComPtr<IMMDeviceEnumerator> enumerator;
-	if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-								IID_PPV_ARGS(&enumerator))))
+	HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+	if (FAILED(hr))
 	{
+		DebugHr(L"CoCreateInstance(MMDeviceEnumerator)", hr);
 		return std::nullopt;
 	}
 
-	ComPtr<IMMDevice> device;
-	if (FAILED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device)))
+	ComPtr<IMMDeviceCollection> devices;
+	hr = enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &devices);
+	if (FAILED(hr) || !devices)
 	{
+		DebugHr(L"EnumAudioEndpoints(eRender)", hr);
 		return std::nullopt;
 	}
 
-	ComPtr<IAudioSessionManager2> sessionManager;
-	if (FAILED(device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr,
-								reinterpret_cast<void**>(sessionManager.GetAddressOf()))))
+	UINT count = 0;
+	hr = devices->GetCount(&count);
+	if (FAILED(hr))
 	{
+		DebugHr(L"IMMDeviceCollection::GetCount", hr);
 		return std::nullopt;
 	}
 
-	ComPtr<IAudioSessionEnumerator> sessionEnum;
-	if (FAILED(sessionManager->GetSessionEnumerator(&sessionEnum)))
+	for (UINT di = 0; di < count; ++di)
 	{
-		return std::nullopt;
-	}
+		ComPtr<IMMDevice> device;
+		if (FAILED(devices->Item(di, &device)) || !device) continue;
 
-	int count = 0;
-	sessionEnum->GetCount(&count);
-	for (int i = 0; i < count; ++i)
-	{
-		ComPtr<IAudioSessionControl> control;
-		if (FAILED(sessionEnum->GetSession(i, &control))) continue;
+		ComPtr<IAudioSessionManager2> sessionManager;
+		hr = device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(sessionManager.GetAddressOf()));
+		if (FAILED(hr) || !sessionManager) continue;
 
-		ComPtr<IAudioSessionControl2> control2;
-		if (FAILED(control.As(&control2))) continue;
+		ComPtr<IAudioSessionEnumerator> sessionEnum;
+		hr = sessionManager->GetSessionEnumerator(&sessionEnum);
+		if (FAILED(hr) || !sessionEnum) continue;
 
-		DWORD pid = 0;
-		if (FAILED(control2->GetProcessId(&pid))) continue;
-		if (pid == 0) continue;
+		int sessionCount = 0;
+		hr = sessionEnum->GetCount(&sessionCount);
+		if (FAILED(hr)) continue;
 
-		HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-		if (!process) continue;
-
-		UINT32 length = 0;
-		GetApplicationUserModelId(process, &length, nullptr);
-		std::wstring processAumid;
-		if (length > 0)
+		for (int i = 0; i < sessionCount; ++i)
 		{
-			processAumid.resize(length);
-			if (SUCCEEDED(GetApplicationUserModelId(process, &length, processAumid.data())))
+			ComPtr<IAudioSessionControl> control;
+			if (FAILED(sessionEnum->GetSession(i, &control)) || !control) continue;
+
+			ComPtr<IAudioSessionControl2> control2;
+			if (FAILED(control.As(&control2)) || !control2) continue;
+
+			DWORD pid = 0;
+			if (FAILED(control2->GetProcessId(&pid)) || pid == 0) continue;
+
+			HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+			if (!process) continue;
+
+			UINT32 length = 0;
+			GetApplicationUserModelId(process, &length, nullptr);
+			std::wstring processAumid;
+			if (length > 0)
 			{
-				if (!processAumid.empty() && processAumid.back() == L'\0')
+				processAumid.resize(length);
+				if (SUCCEEDED(GetApplicationUserModelId(process, &length, processAumid.data())))
 				{
-					processAumid.pop_back();
-				}
-				if (processAumid == aumid)
-				{
-					CloseHandle(process);
-					return pid;
+					if (!processAumid.empty() && processAumid.back() == L'\0')
+					{
+						processAumid.pop_back();
+					}
+					if (processAumid == aumid)
+					{
+						CloseHandle(process);
+						return pid;
+					}
 				}
 			}
+			CloseHandle(process);
 		}
-		CloseHandle(process);
 	}
 
 	return std::nullopt;
@@ -277,27 +366,48 @@ std::optional<uint32_t> MediaAudioAnalyzer::ResolveProcessId(const std::wstring&
 
 bool MediaAudioAnalyzer::EnsureCaptureForTarget(const CaptureTarget& target)
 {
-	if (m_audioClient && target.aumid == m_currentTarget.aumid && target.pid == m_currentTarget.pid)
+	if (!target.active || !target.eligible)
+	{
+		return false;
+	}
+
+	// 変化が無いならそのまま
+	if (m_currentTarget.eligible == target.eligible &&
+		m_currentTarget.active == target.active &&
+		m_currentTarget.aumid == target.aumid &&
+		m_currentTarget.pid == target.pid &&
+		m_audioClient && m_captureClient)
 	{
 		return true;
 	}
 
-	StopCapture();
+	// ターゲット切り替え
 	m_currentTarget = target;
 
 	if (target.pid.has_value())
 	{
+#ifdef _DEBUG
+		OutputDebugStringW(std::format(L"[Audio] Try process loopback pid={} aumid={}\r\n", target.pid.value(), target.aumid).c_str());
+#endif
 		if (StartProcessLoopback(target.pid.value()))
 		{
 			return true;
 		}
+#ifdef _DEBUG
+		OutputDebugStringW(L"[Audio] Process loopback failed; fallback to system loopback\r\n");
+#endif
 	}
 
+#ifdef _DEBUG
+	OutputDebugStringW(L"[Audio] Start system loopback\r\n");
+#endif
 	return StartSystemLoopback();
 }
 
 bool MediaAudioAnalyzer::StartProcessLoopback(uint32_t pid)
 {
+	StopCapture();
+
 	AUDIOCLIENT_ACTIVATION_PARAMS activationParams{};
 	activationParams.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
 	activationParams.ProcessLoopbackParams.TargetProcessId = pid;
@@ -312,12 +422,12 @@ bool MediaAudioAnalyzer::StartProcessLoopback(uint32_t pid)
 	{
 		HANDLE eventHandle{ nullptr };
 		HRESULT hr{ E_FAIL };
-		ComPtr<IAudioClient> client;
+		Microsoft::WRL::ComPtr<IAudioClient> client;
 
 		HRESULT STDMETHODCALLTYPE ActivateCompleted(IActivateAudioInterfaceAsyncOperation* operation) noexcept override
 		{
 			hr = E_FAIL;
-			ComPtr<IAudioClient> audioClient;
+			Microsoft::WRL::ComPtr<IAudioClient> audioClient;
 			if (operation)
 			{
 				HRESULT result = E_FAIL;
@@ -337,10 +447,11 @@ bool MediaAudioAnalyzer::StartProcessLoopback(uint32_t pid)
 	handler->eventHandle = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 	if (!handler->eventHandle) return false;
 
-	ComPtr<IActivateAudioInterfaceAsyncOperation> asyncOp;
+	Microsoft::WRL::ComPtr<IActivateAudioInterfaceAsyncOperation> asyncOp;
 	HRESULT hr = ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, __uuidof(IAudioClient), &var, handler.get(), &asyncOp);
 	if (FAILED(hr))
 	{
+		DebugHr(L"ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK)", hr);
 		CloseHandle(handler->eventHandle);
 		return false;
 	}
@@ -350,65 +461,30 @@ bool MediaAudioAnalyzer::StartProcessLoopback(uint32_t pid)
 
 	if (FAILED(handler->hr) || !handler->client)
 	{
+		DebugHr(L"ActivateCompleted result", handler->hr);
 		return false;
 	}
 
 	m_audioClient = handler->client;
-	return StartSystemLoopback();
-}
 
-bool MediaAudioAnalyzer::StartSystemLoopback()
-{
-	if (!m_audioClient)
-	{
-		ComPtr<IMMDeviceEnumerator> enumerator;
-		if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-									IID_PPV_ARGS(&enumerator))))
-		{
-			return false;
-		}
+	// プロセスループバックでは GetMixFormat/IsFormatSupported が未実装(E_NOTIMPL)のことがあるため、
+	// こちらでフォーマットを指定して Initialize する。
+	WAVEFORMATEX fmt{};
+	fmt.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+	fmt.nChannels = 2;
+	fmt.nSamplesPerSec = 48000;
+	fmt.wBitsPerSample = 32;
+	fmt.nBlockAlign = static_cast<WORD>((fmt.nChannels * fmt.wBitsPerSample) / 8);
+	fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * fmt.nBlockAlign;
+	fmt.cbSize = 0;
 
-		ComPtr<IMMDevice> device;
-		if (FAILED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device)))
-		{
-			return false;
-		}
-		m_captureDevice = device;
+	m_mixFormat = reinterpret_cast<WAVEFORMATEX*>(CoTaskMemAlloc(sizeof(WAVEFORMATEX)));
+	if (!m_mixFormat) return false;
+	*m_mixFormat = fmt;
 
-		if (FAILED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-									reinterpret_cast<void**>(m_audioClient.ReleaseAndGetAddressOf()))))
-		{
-			return false;
-		}
-	}
-
-	if (m_mixFormat)
-	{
-		CoTaskMemFree(m_mixFormat);
-		m_mixFormat = nullptr;
-	}
-
-	if (FAILED(m_audioClient->GetMixFormat(&m_mixFormat)) || !m_mixFormat)
-	{
-		return false;
-	}
-
-	DWORD streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
-	HRESULT hr = m_audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,
-										   streamFlags,
-										   0,
-										   0,
-										   m_mixFormat,
-										   nullptr);
-	if (FAILED(hr))
-	{
-		return false;
-	}
-
-	if (FAILED(m_audioClient->GetService(IID_PPV_ARGS(&m_captureClient))))
-	{
-		return false;
-	}
+#ifdef _DEBUG
+	OutputDebugStringW(std::format(L"[Audio] ProcessLoopback pid={} fmt=float32 ch=2 sr=48000\r\n", pid).c_str());
+#endif
 
 	if (!m_captureEvent)
 	{
@@ -416,15 +492,148 @@ bool MediaAudioAnalyzer::StartSystemLoopback()
 		if (!m_captureEvent) return false;
 	}
 
-	if (FAILED(m_audioClient->SetEventHandle(m_captureEvent)))
+	// まず LOOPBACK フラグありで試し、ダメなら外して再試行。
+	DWORD streamFlags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_LOOPBACK;
+	REFERENCE_TIME hnsBufferDuration = 1'000'000; // 100ms
+	hr = m_audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, streamFlags, hnsBufferDuration, 0, m_mixFormat, nullptr);
+	if (FAILED(hr))
 	{
+		DebugHr(L"IAudioClient::Initialize(ProcessLoopback, with LOOPBACK)", hr);
+		streamFlags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+		hr = m_audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, streamFlags, hnsBufferDuration, 0, m_mixFormat, nullptr);
+		if (FAILED(hr))
+		{
+			DebugHr(L"IAudioClient::Initialize(ProcessLoopback, no LOOPBACK)", hr);
+			return false;
+		}
+	}
+
+	hr = m_audioClient->SetEventHandle(m_captureEvent);
+	if (FAILED(hr))
+	{
+		DebugHr(L"IAudioClient::SetEventHandle(ProcessLoopback)", hr);
 		return false;
 	}
 
-	m_analyzer.Reset(m_mixFormat->nSamplesPerSec, m_mixFormat->nChannels);
+	hr = m_audioClient->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void**>(m_captureClient.ReleaseAndGetAddressOf()));
+	if (FAILED(hr) || !m_captureClient)
+	{
+		DebugHr(L"IAudioClient::GetService(IAudioCaptureClient, ProcessLoopback)", hr);
+		return false;
+	}
+
+	m_analyzer.Reset(static_cast<double>(m_mixFormat->nSamplesPerSec), static_cast<int>(m_mixFormat->nChannels));
 	m_captureStart = std::chrono::steady_clock::now();
 
-	return SUCCEEDED(m_audioClient->Start());
+	hr = m_audioClient->Start();
+	if (FAILED(hr))
+	{
+		DebugHr(L"IAudioClient::Start(ProcessLoopback)", hr);
+		return false;
+	}
+
+	return true;
+}
+
+bool MediaAudioAnalyzer::StartSystemLoopback()
+{
+	StopCapture();
+
+	ComPtr<IMMDeviceEnumerator> enumerator;
+	HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+	if (FAILED(hr))
+	{
+		DebugHr(L"CoCreateInstance(MMDeviceEnumerator)", hr);
+		return false;
+	}
+
+	ComPtr<IMMDevice> device;
+	hr = enumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, &device);
+	if (FAILED(hr))
+	{
+		DebugHr(L"GetDefaultAudioEndpoint(eMultimedia)", hr);
+		hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
+		if (FAILED(hr))
+		{
+			DebugHr(L"GetDefaultAudioEndpoint(eConsole)", hr);
+			return false;
+		}
+	}
+
+	m_captureDevice = device;
+
+	hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(m_audioClient.ReleaseAndGetAddressOf()));
+	if (FAILED(hr) || !m_audioClient)
+	{
+		DebugHr(L"IMMDevice::Activate(IAudioClient)", hr);
+		return false;
+	}
+
+	hr = m_audioClient->GetMixFormat(&m_mixFormat);
+	if (FAILED(hr) || !m_mixFormat)
+	{
+		DebugHr(L"IAudioClient::GetMixFormat", hr);
+		return false;
+	}
+
+#ifdef _DEBUG
+	{
+		const bool isFloat = IsFloatFormat(m_mixFormat);
+		const bool isPcm = IsPcmFormat(m_mixFormat);
+		OutputDebugStringW(std::format(L"[Audio] SystemLoopback MixFormat tag={} bits={} ch={} sr={} float={} pcm={}\r\n",
+									   m_mixFormat->wFormatTag,
+									   m_mixFormat->wBitsPerSample,
+									   m_mixFormat->nChannels,
+									   m_mixFormat->nSamplesPerSec,
+									   isFloat ? 1 : 0,
+									   isPcm ? 1 : 0).c_str());
+		if (m_mixFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+		{
+			WORD validBits = 0;
+			DWORD mask = 0;
+			GUID sub{};
+			wchar_t guidStr[64] = {};
+			if (TryGetExtensibleFields(m_mixFormat, validBits, mask, sub))
+			{
+				StringFromGUID2(sub, guidStr, 64);
+				OutputDebugStringW(std::format(L"[Audio] SystemLoopback Extensible validBits={} channelMask=0x{:08X} subFormat={}\r\n", validBits, mask, guidStr).c_str());
+			}
+			else
+			{
+				OutputDebugStringW(L"[Audio] SystemLoopback Extensible parse failed\r\n");
+			}
+		}
+	}
+#endif
+
+	// endpoint loopback では event-driven が期待通りに動かないことがあるため、ポーリングにする。
+	DWORD streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK;
+	REFERENCE_TIME hnsBufferDuration = 1'000'000; // 100ms
+	hr = m_audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, streamFlags, hnsBufferDuration, 0, m_mixFormat, nullptr);
+	if (FAILED(hr))
+	{
+		DebugHr(L"IAudioClient::Initialize(SystemLoopback)", hr);
+		return false;
+	}
+
+	hr = m_audioClient->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void**>(m_captureClient.ReleaseAndGetAddressOf()));
+	if (FAILED(hr) || !m_captureClient)
+	{
+		DebugHr(L"IAudioClient::GetService(IAudioCaptureClient)", hr);
+		return false;
+	}
+
+	m_analyzer.Reset(static_cast<double>(m_mixFormat->nSamplesPerSec), static_cast<int>(m_mixFormat->nChannels));
+	m_captureStart = std::chrono::steady_clock::now();
+
+	hr = m_audioClient->Start();
+	if (FAILED(hr))
+	{
+		DebugHr(L"IAudioClient::Start(SystemLoopback)", hr);
+		return false;
+	}
+
+	return true;
 }
 
 void MediaAudioAnalyzer::StopCapture()
@@ -441,46 +650,70 @@ void MediaAudioAnalyzer::StopCapture()
 		CoTaskMemFree(m_mixFormat);
 		m_mixFormat = nullptr;
 	}
+	if (m_captureEvent)
+	{
+		CloseHandle(m_captureEvent);
+		m_captureEvent = nullptr;
+	}
+	m_currentTarget = CaptureTarget{};
 }
 
 bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 {
-	if (!m_audioClient || !m_captureClient || !m_mixFormat || !m_captureEvent)
+	if (!m_audioClient || !m_captureClient || !m_mixFormat)
 	{
 		return false;
 	}
 
-	DWORD wait = WaitForSingleObject(m_captureEvent, kCaptureWaitMs);
-	if (wait != WAIT_OBJECT_0)
+	// event-driven の場合だけ待つ。TIMEOUT でも必ずポーリングする。
+	if (m_captureEvent)
 	{
-		return false;
+		DWORD wait = WaitForSingleObject(m_captureEvent, kCaptureWaitMs);
+		if (wait == WAIT_FAILED)
+		{
+			return false;
+		}
 	}
+	else
+	{
+		Sleep(5);
+	}
+
+	const bool isFloat = IsFloatFormat(m_mixFormat);
+	const bool isPcm = IsPcmFormat(m_mixFormat);
+
+	const int channels = static_cast<int>(m_mixFormat->nChannels);
+	const double sampleRate = static_cast<double>(m_mixFormat->nSamplesPerSec);
 
 	UINT32 packetLength = 0;
 	HRESULT hr = m_captureClient->GetNextPacketSize(&packetLength);
 	if (FAILED(hr))
 	{
+		DebugHr(L"IAudioCaptureClient::GetNextPacketSize", hr);
 		return false;
 	}
 
-	const bool isFloat = IsFloatFormat(m_mixFormat);
-	const bool isPcm = IsPcmFormat(m_mixFormat);
-	const int channels = static_cast<int>(m_mixFormat->nChannels);
-	const double sampleRate = static_cast<double>(m_mixFormat->nSamplesPerSec);
+	bool anyPacket = false;
+	bool anyNonSilent = false;
+	float maxAbs = 0.0f;
 
 	while (packetLength > 0 && !stopToken.stop_requested())
 	{
 		BYTE* data = nullptr;
 		UINT32 frames = 0;
 		DWORD flags = 0;
+
 		hr = m_captureClient->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
-		if (FAILED(hr) || frames == 0)
+		if (FAILED(hr))
 		{
+			DebugHr(L"IAudioCaptureClient::GetBuffer", hr);
 			break;
 		}
 
+		anyPacket = true;
+
 		std::vector<float> floatBuffer;
-		floatBuffer.resize(static_cast<size_t>(frames) * channels);
+		floatBuffer.resize(static_cast<size_t>(frames) * static_cast<size_t>(channels));
 
 		if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
 		{
@@ -491,17 +724,120 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 			const float* in = reinterpret_cast<const float*>(data);
 			std::copy(in, in + floatBuffer.size(), floatBuffer.begin());
 		}
-		else if (isPcm && m_mixFormat->wBitsPerSample == 16)
+		else if (isPcm)
 		{
-			const int16_t* in = reinterpret_cast<const int16_t*>(data);
-			for (size_t i = 0; i < floatBuffer.size(); ++i)
+			const UINT16 bits = m_mixFormat->wBitsPerSample;
+
+			if (bits == 8)
 			{
-				floatBuffer[i] = static_cast<float>(in[i]) / 32768.0f;
+				const uint8_t* in = reinterpret_cast<const uint8_t*>(data);
+				for (size_t i = 0; i < floatBuffer.size(); ++i)
+				{
+					floatBuffer[i] = (static_cast<float>(in[i]) - 128.0f) / 128.0f;
+				}
+			}
+			else if (bits == 16)
+			{
+				const int16_t* in = reinterpret_cast<const int16_t*>(data);
+				for (size_t i = 0; i < floatBuffer.size(); ++i)
+				{
+					floatBuffer[i] = static_cast<float>(in[i]) / 32768.0f;
+				}
+			}
+			else if (bits == 24)
+			{
+				const uint8_t* in = reinterpret_cast<const uint8_t*>(data);
+				for (size_t i = 0; i < floatBuffer.size(); ++i)
+				{
+					const uint32_t b0 = in[i * 3 + 0];
+					const uint32_t b1 = in[i * 3 + 1];
+					const uint32_t b2 = in[i * 3 + 2];
+					int32_t s = static_cast<int32_t>(b0 | (b1 << 8) | (b2 << 16));
+					s = (s << 8) >> 8;
+					floatBuffer[i] = static_cast<float>(static_cast<double>(s) / 8388608.0);
+				}
+			}
+			else if (bits == 32)
+			{
+				const int32_t* in = reinterpret_cast<const int32_t*>(data);
+
+				// validBits を見て「左詰め/右詰め」を自動判定して正規化する（環境差対策）。
+				int validBits = 32;
+				if (m_mixFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+				{
+					WORD vb = 0;
+					DWORD mask = 0;
+					GUID sub{};
+					if (TryGetExtensibleFields(m_mixFormat, vb, mask, sub))
+					{
+						if (vb > 0 && vb <= 32)
+						{
+							validBits = static_cast<int>(vb);
+						}
+					}
+				}
+				// 先頭少数サンプルで「下位ビットがゼロか」を見て左詰め判定
+				bool looksLeftAligned = (validBits < 32);
+				if (validBits < 32)
+				{
+					const int checkN = static_cast<int>(std::min<size_t>(64, floatBuffer.size()));
+					uint32_t lowMask = (1u << (32 - validBits)) - 1u;
+					int nonZeroLow = 0;
+					for (int i = 0; i < checkN; ++i)
+					{
+						if ((static_cast<uint32_t>(in[i]) & lowMask) != 0) nonZeroLow++;
+					}
+					looksLeftAligned = (nonZeroLow == 0);
+				}
+
+				if (looksLeftAligned)
+				{
+					for (size_t i = 0; i < floatBuffer.size(); ++i)
+					{
+						floatBuffer[i] = static_cast<float>(static_cast<double>(in[i]) / 2147483648.0);
+					}
+				}
+				else
+				{
+					const int shift = 32 - validBits;
+					const double denom = static_cast<double>(1ULL << (validBits - 1));
+					for (size_t i = 0; i < floatBuffer.size(); ++i)
+					{
+						int32_t s = in[i];
+						s = (s << shift) >> shift;
+						floatBuffer[i] = static_cast<float>(static_cast<double>(s) / denom);
+					}
+				}
+			}
+			else
+			{
+				static std::atomic_bool s_logged{ false };
+				if (!s_logged.exchange(true))
+				{
+					OutputDebugStringW(std::format(L"[Audio] Unsupported PCM bits={} -> treated as silence\r\n", bits).c_str());
+				}
+				std::fill(floatBuffer.begin(), floatBuffer.end(), 0.0f);
 			}
 		}
 		else
 		{
+			static std::atomic_bool s_logged{ false };
+			if (!s_logged.exchange(true))
+			{
+				OutputDebugStringW(std::format(L"[Audio] Unsupported format tag={} bits={} (not float/pcm) -> treated as silence\r\n", m_mixFormat->wFormatTag, m_mixFormat->wBitsPerSample).c_str());
+			}
 			std::fill(floatBuffer.begin(), floatBuffer.end(), 0.0f);
+		}
+
+		// 取り込めているかの統計（1秒に1回だけログ）
+		{
+			const size_t checkN = std::min<size_t>(floatBuffer.size(), 4096);
+			for (size_t i = 0; i < checkN; ++i)
+			{
+				float a = std::abs(floatBuffer[i]);
+				if (a > maxAbs) maxAbs = a;
+			}
+			if (maxAbs > 1e-6f) anyNonSilent = true;
 		}
 
 		auto now = std::chrono::steady_clock::now();
@@ -515,10 +851,28 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 		}
 
 		m_captureClient->ReleaseBuffer(frames);
+
 		hr = m_captureClient->GetNextPacketSize(&packetLength);
-		if (FAILED(hr)) break;
+		if (FAILED(hr))
+		{
+			DebugHr(L"IAudioCaptureClient::GetNextPacketSize(loop)", hr);
+			break;
+		}
 	}
 
+#ifdef _DEBUG
+	{
+		static auto s_lastLog = std::chrono::steady_clock::now();
+		const auto now = std::chrono::steady_clock::now();
+		if (now - s_lastLog >= std::chrono::seconds(1))
+		{
+			s_lastLog = now;
+			OutputDebugStringW(std::format(L"[Audio] Capture anyPacket={} anyNonSilent={} maxAbs={:.6f}\r\n", anyPacket ? 1 : 0, anyNonSilent ? 1 : 0, maxAbs).c_str());
+		}
+	}
+#endif
+
+	// データが来ていないだけなら「成功」とする
 	return true;
 }
 

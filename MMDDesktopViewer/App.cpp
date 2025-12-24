@@ -397,7 +397,22 @@ void App::OnTimer()
 	{
 		if (m_mediaAudio)
 		{
-			m_animator->SetAudioReactiveState(m_mediaAudio->GetState());
+			const auto st = m_mediaAudio->GetState();
+
+#if _DEBUG
+
+			static auto last = std::chrono::steady_clock::now();
+			const auto now = std::chrono::steady_clock::now();
+			if (now - last > std::chrono::seconds(1))
+			{
+				last = now;
+				OutputDebugStringW(std::format(
+					L"[Audio] active={} bpm={:.1f} beat={:.3f} mouth={:.3f}\r\n",
+					st.active ? 1 : 0, st.bpm, st.beatStrength, st.mouthOpen).c_str());
+			}
+#endif
+
+			m_animator->SetAudioReactiveState(st);
 		}
 		m_animator->Update();
 	}
