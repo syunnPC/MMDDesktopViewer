@@ -146,7 +146,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ PWSTR, _I
 	}
 	catch (const std::exception& e)
 	{
-		std::wstring msg = L"Fatal error:\n";
+		std::wstring msg = L"致命的なエラー:\n";
 		msg += StringUtil::Utf8ToWideAllowAcpFallback(e.what());
 		MessageBoxW(nullptr, msg.c_str(), L"MMDDesk", MB_ICONERROR);
 		OutputDebugStringW(msg.c_str());
@@ -154,7 +154,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ PWSTR, _I
 	}
 	catch (...)
 	{
-		MessageBoxW(nullptr, L"Fatal error: unknown exception", L"MMDDesk", MB_ICONERROR);
+		MessageBoxW(nullptr, L"致命的なエラー: 不明な例外が発生しました。", L"MMDDesk", MB_ICONERROR);
 		return -1;
 	}
 }
