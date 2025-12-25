@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <windows.h>
 #include <functional>
@@ -18,6 +18,7 @@ class WindowManager
 public:
 	struct Callbacks
 	{
+		std::function<void(const POINT&)> onTrayMenuRequested;
 		std::function<void(UINT)> onTrayCommand;
 		std::function<void()> onTimer;
 		std::function<void(WPARAM, LPARAM)> onLoadComplete;
@@ -48,7 +49,7 @@ public:
 	}
 
 	void SetRenderer(DcompRenderer* renderer);
-	void SetTray(TrayIcon* tray, HMENU menu);
+	void SetTray(TrayIcon* tray);
 
 	void ApplyTopmost(bool alwaysOnTop) const;
 	void UpdateTimerInterval(UINT intervalMs);
@@ -97,7 +98,8 @@ private:
 	HWND m_gizmoWnd{};
 
 	TrayIcon* m_tray{};
-	HMENU m_trayMenu{};
+
+	ULONGLONG m_lastTrayMenuTick{ 0 };
 
 	DcompRenderer* m_renderer{};
 

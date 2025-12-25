@@ -13,6 +13,7 @@
 #include "inputManager.hpp"
 #include "WindowManager.hpp"
 #include "AudioReactiveState.hpp"
+#include "TrayMenuWindow.hpp"
 
 class SettingsWindow;
 class MediaAudioAnalyzer;
@@ -77,11 +78,13 @@ private:
 	void ShowNotification(const std::wstring& title, const std::wstring& message) const;
 
 	void OnTrayCommand(UINT id);
+	void ShowTrayMenu(const POINT& anchor);
 	void OnTimer();
 
 	HINSTANCE m_hInst{};
 
 	std::unique_ptr<TrayIcon> m_tray;
+	std::unique_ptr<TrayMenuWindow> m_trayMenu;
 	std::unique_ptr<SettingsWindow> m_settings;
 
 	std::unique_ptr<DcompRenderer> m_renderer;
@@ -98,8 +101,6 @@ private:
 	std::filesystem::path m_motionsDir;
 
 	std::vector<std::filesystem::path> m_motionFiles;
-
-	HMENU m_trayMenu{};
 
 	bool m_comInitialized{ false };
 

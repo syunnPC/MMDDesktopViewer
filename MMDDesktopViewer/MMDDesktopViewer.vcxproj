@@ -212,6 +212,7 @@
     <ClCompile Include="Settings.cpp" />
     <ClCompile Include="SettingsWindow.cpp" />
     <ClCompile Include="TrayIcon.cpp" />
+    <ClCompile Include="TrayMenuWindow.cpp" />
     <ClCompile Include="VmdMotion.cpp" />
     <ClCompile Include="WicTexture.cpp" />
     <ClCompile Include="WindowManager.cpp" />
@@ -241,6 +242,7 @@
     <ClInclude Include="Settings.hpp" />
     <ClInclude Include="SettingsWindow.hpp" />
     <ClInclude Include="TrayIcon.hpp" />
+    <ClInclude Include="TrayMenuWindow.hpp" />
     <ClInclude Include="VmdMotion.hpp" />
     <ClInclude Include="WicTexture.hpp" />
     <ClInclude Include="WindowManager.hpp" />

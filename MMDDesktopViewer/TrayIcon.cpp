@@ -1,4 +1,5 @@
 ﻿#include "TrayIcon.hpp"
+#include "Resource.h"
 #include <stdexcept>
 
 TrayIcon::TrayIcon(HWND owner, UINT id)
@@ -22,7 +23,12 @@ void TrayIcon::Show(const wchar_t* tooltip)
 
 	m_nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
 	m_nid.uCallbackMessage = m_callbackMsg;
-	m_nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+	HINSTANCE hInst = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(m_owner, GWLP_HINSTANCE));
+	m_nid.hIcon = LoadIconW(hInst, MAKEINTRESOURCEW(IDI_MMDDESKTOPVIEWER));
+	if (!m_nid.hIcon)
+	{
+		m_nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+	}
 
 	if (tooltip)
 	{
@@ -64,6 +70,12 @@ bool TrayIcon::HandleMessage(HWND, UINT msg, WPARAM wParam, LPARAM lParam) const
 
 	if (LOWORD(lParam) == WM_RBUTTONUP || LOWORD(lParam) == WM_CONTEXTMENU)
 	{
+		// If no HMENU is configured, do not swallow the notification.
+		// The owner window may want to show a custom menu UI.
+		if (!m_menu)
+		{
+			return false;
+		}
 		ShowContextMenu();
 		return true;
 	}

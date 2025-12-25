@@ -46,6 +46,7 @@ App::App(HINSTANCE hInst)
 		m_input,
 		m_settingsData,
 		WindowManager::Callbacks{
+			[this](const POINT& pt) { ShowTrayMenu(pt); },
 			[this](UINT id) { OnTrayCommand(id); },
 			[this]() { OnTimer(); },
 			[this](WPARAM wParam, LPARAM lParam) { OnLoadComplete(wParam, lParam); },
@@ -94,6 +95,7 @@ App::App(HINSTANCE hInst)
 	InitAnimator();
 	m_mediaAudio = std::make_unique<MediaAudioAnalyzer>();
 	m_mediaAudio->SetEnabled(m_settingsData.mediaReactiveEnabled);
+	m_trayMenu = std::make_unique<TrayMenuWindow>(m_hInst, [this](UINT id) { OnTrayCommand(id); });
 
 	BuildTrayMenu();
 	InitTray();
@@ -105,7 +107,6 @@ App::~App()
 {
 	SaveSettings();
 
-	if (m_trayMenu) DestroyMenu(m_trayMenu);
 	m_input.UnregisterHotkeys(m_windowManager.RenderWindow());
 
 	if (m_comInitialized)
@@ -567,77 +568,150 @@ void App::InitTray()
 {
 	m_tray = std::make_unique<TrayIcon>(m_windowManager.MessageWindow(), 1);
 	m_tray->Show(L"MMDDesk");
-	m_tray->SetContextMenu(m_trayMenu);
-	m_windowManager.SetTray(m_tray.get(), m_trayMenu);
+	m_windowManager.SetTray(m_tray.get());
 }
 
 void App::BuildTrayMenu()
 {
-	if (m_trayMenu)
-	{
-		DestroyMenu(m_trayMenu);
-	}
-	m_trayMenu = CreatePopupMenu();
-
-	AppendMenuW(m_trayMenu, MF_STRING, CMD_OPEN_SETTINGS, L"設定...");
-
-	UINT manipFlags = MF_STRING;
-	manipFlags |= m_windowManager.IsWindowManipulationMode() ? MF_CHECKED : MF_UNCHECKED;
-	AppendMenuW(m_trayMenu, manipFlags, CMD_TOGGLE_WINDOW_MANIP, L"ウィンドウ操作モード (Ctrl+Alt+R)");
-
-	AppendMenuW(m_trayMenu, MF_SEPARATOR, 0, nullptr);
+	if (!m_trayMenu) return;
 
 	RefreshMotionList();
 
-	HMENU motionMenu = CreatePopupMenu();
-
-	std::wstring pauseText = (m_animator && m_animator->IsPaused()) ? L"再開" : L"一時停止";
-	AppendMenuW(motionMenu, MF_STRING, CMD_TOGGLE_PAUSE, pauseText.c_str());
-
-	std::wstring physText = (m_animator && m_animator->PhysicsEnabled()) ? L"物理: ON" : L"物理: OFF";
-	AppendMenuW(motionMenu, MF_STRING, CMD_TOGGLE_PHYSICS, physText.c_str());
-
-	// LookAt メニュー
-	UINT lookAtFlags = MF_STRING;
-	lookAtFlags |= m_lookAtEnabled ? MF_CHECKED : MF_UNCHECKED;
-	AppendMenuW(motionMenu, lookAtFlags, CMD_TOGGLE_LOOKAT, L"視線追従");
-
-	// 自動まばたきメニュー
-	UINT blinkFlags = MF_STRING;
-	if (m_animator && m_animator->AutoBlinkEnabled()) blinkFlags |= MF_CHECKED;
-	else blinkFlags |= MF_UNCHECKED;
-	AppendMenuW(motionMenu, blinkFlags, CMD_TOGGLE_AUTOBLINK, L"自動まばたき");
-
-	UINT breathFlags = MF_STRING;
-	if (m_animator && m_animator->BreathingEnabled()) breathFlags |= MF_CHECKED;
-	else breathFlags |= MF_UNCHECKED;
-	AppendMenuW(motionMenu, breathFlags, CMD_TOGGLE_BREATH, L"呼吸モーション (待機時)");
-
-	UINT mediaFlags = MF_STRING;
-	mediaFlags |= m_settingsData.mediaReactiveEnabled ? MF_CHECKED : MF_UNCHECKED;
-	AppendMenuW(motionMenu, mediaFlags, CMD_TOGGLE_MEDIA_REACTIVE, L"メディア連動 (SMTC/WASAPI)");
-
-	AppendMenuW(motionMenu, MF_STRING, CMD_STOP_MOTION, L"停止 (リセット)");
-	AppendMenuW(motionMenu, MF_SEPARATOR, 0, nullptr);
-
-	for (size_t i = 0; i < m_motionFiles.size(); ++i)
+	TrayMenuModel model{};
+	model.title = L"MMD Desktop Viewer";
+	if (!m_settingsData.modelPath.empty())
 	{
-		const auto& path = m_motionFiles[i];
-		std::wstring name = path.stem().wstring();
-		AppendMenuW(motionMenu, MF_STRING, CMD_MOTION_BASE + static_cast<UINT>(i), name.c_str());
+		model.subtitle = m_settingsData.modelPath.filename().wstring();
+	}
+	else
+	{
+		model.subtitle = L"モデル未読み込み";
 	}
 
-	AppendMenuW(m_trayMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(motionMenu), L"モーション");
-	AppendMenuW(m_trayMenu, MF_STRING, CMD_RELOAD_MOTIONS, L"モーション一覧を更新");
+	const bool paused = (m_animator && m_animator->IsPaused());
+	const bool physicsEnabled = (m_animator && m_animator->PhysicsEnabled());
+	const bool autoBlink = (m_animator && m_animator->AutoBlinkEnabled());
+	const bool breathing = (m_animator && m_animator->BreathingEnabled());
 
-	AppendMenuW(m_trayMenu, MF_SEPARATOR, 0, nullptr);
-	AppendMenuW(m_trayMenu, MF_STRING, CMD_EXIT, L"終了");
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Action, CMD_OPEN_SETTINGS, L"設定", L"描画・ライティング・プリセットを編集"
+						  });
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle, CMD_TOGGLE_WINDOW_MANIP, L"ウィンドウ操作モード", L"Ctrl+Alt+R で切り替え", m_windowManager.IsWindowManipulationMode()
+						  });
 
-	if (m_tray)
+	model.items.push_back(TrayMenuItem{ TrayMenuItem::Kind::Separator, 0, L"", L"" });
+	model.items.push_back(TrayMenuItem{ TrayMenuItem::Kind::Header, 0, L"再生コントロール", L"" });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle,
+		CMD_TOGGLE_PAUSE,
+		paused ? L"再生を再開" : L"一時停止",
+		L"現在のモーションを一時停止 / 再開",
+		paused
+						  });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle,
+		CMD_TOGGLE_PHYSICS,
+		L"物理シミュレーション",
+		physicsEnabled ? L"有効" : L"無効",
+		physicsEnabled
+						  });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle,
+		CMD_TOGGLE_LOOKAT,
+		L"視線追従",
+		L"視線を注視点へ向けます",
+		m_lookAtEnabled
+						  });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle,
+		CMD_TOGGLE_AUTOBLINK,
+		L"自動まばたき",
+		L"自然なまばたきを付与",
+		autoBlink
+						  });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle,
+		CMD_TOGGLE_BREATH,
+		L"呼吸モーション (待機時)",
+		L"待機中の呼吸モーションを制御",
+		breathing
+						  });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle,
+		CMD_TOGGLE_MEDIA_REACTIVE,
+		L"メディア連動 (SMTC/WASAPI)",
+		L"音楽のビートに合わせて動作",
+		m_settingsData.mediaReactiveEnabled
+						  });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Action,
+		CMD_STOP_MOTION,
+		L"停止 (リセット)",
+		L"再生を止めてポーズをリセット",
+		false,
+		true
+						  });
+
+	model.items.push_back(TrayMenuItem{ TrayMenuItem::Kind::Separator, 0, L"", L"" });
+	model.items.push_back(TrayMenuItem{ TrayMenuItem::Kind::Header, 0, L"モーション", L"" });
+
+	if (m_motionFiles.empty())
 	{
-		m_tray->SetContextMenu(m_trayMenu);
+		model.items.push_back(TrayMenuItem{
+			TrayMenuItem::Kind::Action,
+			0,
+			L"モーションファイルが見つかりません",
+			L"\"Motions\" フォルダーに .vmd を追加してください"
+							  });
 	}
-	m_windowManager.SetTray(m_tray.get(), m_trayMenu);
+	else
+	{
+		for (size_t i = 0; i < m_motionFiles.size(); ++i)
+		{
+			const auto& path = m_motionFiles[i];
+			std::wstring name = path.stem().wstring();
+			model.items.push_back(TrayMenuItem{
+				TrayMenuItem::Kind::Action,
+				CMD_MOTION_BASE + static_cast<UINT>(i),
+				name,
+				L"クリックして再生を開始"
+								  });
+		}
+	}
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Action,
+		CMD_RELOAD_MOTIONS,
+		L"モーション一覧を更新",
+		L"フォルダーを再スキャンします"
+						  });
+
+	model.items.push_back(TrayMenuItem{ TrayMenuItem::Kind::Separator, 0, L"", L"" });
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Action,
+		CMD_EXIT,
+		L"終了",
+		L"アプリケーションを終了します",
+		false,
+		true
+						  });
+
+	m_trayMenu->SetModel(model);
+}
+
+void App::ShowTrayMenu(const POINT& anchor)
+{
+	if (!m_trayMenu) return;
+	BuildTrayMenu();
+	m_trayMenu->ShowAt(anchor);
 }
 
 void App::RefreshMotionList()
@@ -805,6 +879,11 @@ void App::SaveSettings()
 
 void App::OnTrayCommand(UINT id)
 {
+	if (m_trayMenu)
+	{
+		m_trayMenu->Hide();
+	}
+
 	switch (id)
 	{
 		case CMD_OPEN_SETTINGS:
