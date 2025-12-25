@@ -33,6 +33,30 @@ struct TrayMenuModel
 	std::vector<TrayMenuItem> items;
 };
 
+enum class TrayMenuThemeId
+{
+	DarkDefault,
+	Light,
+	Midnight,
+	Sakura,
+	SolarizedDark,
+	HighContrast,
+	Custom
+};
+
+struct TrayMenuTheme
+{
+	COLORREF background{};
+	COLORREF headerBackground{};
+	COLORREF cardHover{};
+	COLORREF textPrimary{};
+	COLORREF textMuted{};
+	COLORREF accent{};
+	COLORREF danger{};
+	COLORREF outline{};
+};
+
+
 class TrayMenuWindow
 {
 public:
@@ -45,6 +69,18 @@ public:
 	void SetModel(const TrayMenuModel& model);
 	void ShowAt(POINT anchor);
 	void Hide();
+
+
+	void SetTheme(TrayMenuThemeId id);
+	void SetTheme(const TrayMenuTheme& customTheme);
+	TrayMenuThemeId GetThemeId() const
+	{
+		return m_themeId;
+	}
+	const TrayMenuTheme& GetTheme() const
+	{
+		return m_theme;
+	}
 
 	bool IsVisible() const
 	{
@@ -72,9 +108,11 @@ private:
 	void EnsureFonts();
 	void RebuildLayout();
 	void Paint(HDC hdc);
+	void DrawContents(HDC hdc);
 	void DrawHeader(HDC hdc, int offsetY) const;
 	void DrawItem(HDC hdc, const LayoutItem& item, int offsetY) const;
 	void DrawScrollbar(HDC hdc) const;
+	void DrawToggleSwitch(HDC hdc, const RECT& pill, bool toggled) const;
 	void HandleMouse(POINT pt, bool activate);
 	void HandleCommand(const TrayMenuItem& item);
 	void OnMouseWheelDelta(int wheelDelta);
@@ -108,6 +146,10 @@ private:
 	HFONT m_bodyFont{ nullptr };
 	HFONT m_headerFont{ nullptr };
 
+
+	TrayMenuTheme m_theme{};
+	TrayMenuThemeId m_themeId{ TrayMenuThemeId::DarkDefault };
+
 	TrayMenuModel m_model;
 	std::vector<LayoutItem> m_layout;
 	SIZE m_windowSize{ 360, 0 };
@@ -134,6 +176,7 @@ private:
 	TrayMenuWindow* m_parentWindow = nullptr;
 	bool m_isSubMenu = false;
 	int m_openSubMenuIndex = -1;
+	TrayMenuWindow* m_lastRoutedTarget = nullptr;
 
 	void CloseSubMenu();
 	void OpenSubMenu(int index);

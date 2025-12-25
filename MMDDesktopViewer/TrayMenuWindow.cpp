@@ -2,19 +2,21 @@
 #define NOMINMAX
 #endif
 
+#ifdef WIN32_LEAN_AND_MEAN
+#undef WIN32_LEAN_AND_MEAN
+#endif
+
 #include "TrayMenuWindow.hpp"
 #include <algorithm>
 #include <dwmapi.h>
-#include <stdexcept>
-#include <uxtheme.h>
-#include <windowsx.h>
-#include <utility>
-#include <string>
-#include <format>
-#include <set>
 #include <unordered_map>
+#include <utility>
+#include <windowsx.h>
+
+#include <gdiplus.h>
 
 #pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "gdiplus.lib")
 
 namespace
 {
@@ -25,22 +27,109 @@ namespace
 		return RGB(r, g, b);
 	}
 
-	struct Theme
+	std::wstring ToLowerAscii(std::wstring s)
 	{
-		COLORREF background{ Rgb(20, 22, 27) };
-		COLORREF headerBackground{ Rgb(28, 30, 36) };
-		COLORREF cardHover{ Rgb(38, 43, 52) };
-		COLORREF textPrimary{ Rgb(235, 238, 243) };
-		COLORREF textMuted{ Rgb(165, 169, 179) };
-		COLORREF accent{ Rgb(0, 120, 215) };
-		COLORREF danger{ Rgb(203, 68, 80) };
-		COLORREF outline{ Rgb(64, 68, 78) };
-	};
+		for (auto& ch : s)
+		{
+			if (ch >= L'A' && ch <= L'Z')
+			{
+				ch = static_cast<wchar_t>(ch - L'A' + L'a');
+			}
+		}
+		return s;
+	}
 
-	const Theme& GetTheme()
+	bool IsMotionHeaderTitle(const std::wstring& t)
 	{
-		static Theme theme{};
-		return theme;
+		if (t == L"モーション") return true;
+		const std::wstring s = ToLowerAscii(t);
+		return (s == L"motion" || s == L"motions");
+	}
+
+	TrayMenuTheme MakePresetTheme(TrayMenuThemeId id)
+	{
+		// NOTE: DarkDefault は既存の見た目（旧 Theme の初期値）と同一。
+		switch (id)
+		{
+			case TrayMenuThemeId::DarkDefault:
+				return TrayMenuTheme{
+					Rgb(20, 22, 27),   // background
+					Rgb(28, 30, 36),   // headerBackground
+					Rgb(38, 43, 52),   // cardHover
+					Rgb(235, 238, 243),// textPrimary
+					Rgb(165, 169, 179),// textMuted
+					Rgb(0, 120, 215),  // accent
+					Rgb(203, 68, 80),  // danger
+					Rgb(64, 68, 78)    // outline
+				};
+
+			case TrayMenuThemeId::Light:
+				return TrayMenuTheme{
+					Rgb(250, 250, 252),
+					Rgb(242, 244, 248),
+					Rgb(230, 234, 242),
+					Rgb(20, 22, 26),
+					Rgb(92, 96, 105),
+					Rgb(0, 120, 215),
+					Rgb(196, 59, 76),
+					Rgb(200, 205, 214)
+				};
+
+			case TrayMenuThemeId::Midnight:
+				return TrayMenuTheme{
+					Rgb(10, 14, 24),   // deep navy
+					Rgb(16, 20, 34),
+					Rgb(26, 34, 56),
+					Rgb(236, 241, 250),
+					Rgb(150, 165, 190),
+					Rgb(0, 203, 255),  // cyan accent
+					Rgb(255, 82, 110),
+					Rgb(52, 62, 86)
+				};
+
+			case TrayMenuThemeId::Sakura:
+				// dark base + pink accent
+				return TrayMenuTheme{
+					Rgb(26, 20, 24),
+					Rgb(36, 27, 32),
+					Rgb(50, 36, 43),
+					Rgb(244, 232, 240),
+					Rgb(200, 176, 192),
+					Rgb(255, 95, 162),
+					Rgb(255, 75, 92),
+					Rgb(78, 56, 66)
+				};
+
+			case TrayMenuThemeId::SolarizedDark:
+				// Solarized (base03/base02/base01 etc.)
+				return TrayMenuTheme{
+					Rgb(0, 43, 54),    // base03
+					Rgb(7, 54, 66),    // base02
+					Rgb(12, 73, 88),   // hover (slightly brighter)
+					Rgb(238, 232, 213),// base2
+					Rgb(147, 161, 161),// base1
+					Rgb(38, 139, 210), // blue
+					Rgb(220, 50, 47),  // red
+					Rgb(88, 110, 117)  // base01
+				};
+
+			case TrayMenuThemeId::HighContrast:
+				return TrayMenuTheme{
+					Rgb(0, 0, 0),
+					Rgb(0, 0, 0),
+					Rgb(35, 35, 35),
+					Rgb(255, 255, 255),
+					Rgb(200, 200, 200),
+					Rgb(255, 215, 0),  // yellow accent
+					Rgb(255, 80, 80),
+					Rgb(255, 255, 255)
+				};
+
+			default:
+				break;
+		}
+
+		return MakePresetTheme(TrayMenuThemeId::DarkDefault);
 	}
 
 	int GetSystemDpi(HWND hWnd)
@@ -73,12 +162,54 @@ namespace
 		ReleaseDC(nullptr, hdc);
 		return (dpi > 0) ? dpi : 96;
 	}
+
+	Gdiplus::Color ToColor(COLORREF c, BYTE a = 255)
+	{
+		return Gdiplus::Color(a, GetRValue(c), GetGValue(c), GetBValue(c));
+	}
+
+	void AddRoundedRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rect, float radius)
+	{
+		const float diameter = radius * 2.0f;
+		const float right = rect.X + rect.Width;
+		const float bottom = rect.Y + rect.Height;
+
+		path.AddArc(rect.X, rect.Y, diameter, diameter, 180.0f, 90.0f);
+		path.AddArc(right - diameter, rect.Y, diameter, diameter, 270.0f, 90.0f);
+		path.AddArc(right - diameter, bottom - diameter, diameter, diameter, 0.0f, 90.0f);
+		path.AddArc(rect.X, bottom - diameter, diameter, diameter, 90.0f, 90.0f);
+		path.CloseFigure();
+	}
+
+	struct GdiplusInitializer
+	{
+		GdiplusInitializer()
+		{
+			Gdiplus::GdiplusStartupInput input{};
+			Gdiplus::GdiplusStartup(&token, &input, nullptr);
+		}
+
+		~GdiplusInitializer()
+		{
+			if (token)
+			{
+				Gdiplus::GdiplusShutdown(token);
+			}
+		}
+
+		ULONG_PTR token{};
+	};
+
+	GdiplusInitializer g_gdiplusInit{};
 }
 
 TrayMenuWindow::TrayMenuWindow(HINSTANCE hInst, std::function<void(UINT)> onCommand)
 	: m_hInst(hInst)
 	, m_onCommand(std::move(onCommand))
 {
+	m_themeId = TrayMenuThemeId::DarkDefault;
+	m_theme = MakePresetTheme(m_themeId);
+
 	WNDCLASSEXW wc{};
 	wc.cbSize = sizeof(wc);
 	wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
@@ -119,6 +250,35 @@ void TrayMenuWindow::SetModel(const TrayMenuModel& model)
 	{
 		UpdateTopLevelPlacement();
 		InvalidateRect(m_hWnd, nullptr, FALSE);
+	}
+}
+
+void TrayMenuWindow::SetTheme(TrayMenuThemeId id)
+{
+	m_themeId = id;
+	if (m_themeId == TrayMenuThemeId::Custom)
+	{
+		m_themeId = TrayMenuThemeId::DarkDefault;
+	}
+
+	m_theme = MakePresetTheme(m_themeId);
+
+	if (m_hWnd && m_visible)
+	{
+		InvalidateRect(m_hWnd, nullptr, FALSE);
+		UpdateWindow(m_hWnd);
+	}
+}
+
+void TrayMenuWindow::SetTheme(const TrayMenuTheme& customTheme)
+{
+	m_themeId = TrayMenuThemeId::Custom;
+	m_theme = customTheme;
+
+	if (m_hWnd && m_visible)
+	{
+		InvalidateRect(m_hWnd, nullptr, FALSE);
+		UpdateWindow(m_hWnd);
 	}
 }
 
@@ -257,17 +417,6 @@ void TrayMenuWindow::RebuildLayout()
 
 	// 「モーション」はホバーで横に展開したいので、ヘッダー配下のフラットな項目を仮想 children にまとめて
 	// 親ウィンドウ内で縦方向に展開されないようにする（Windows 95 スタートメニュー風）
-	auto isMotionHeaderTitle = [](const std::wstring& t) -> bool
-		{
-			if (t == L"モーション") return true;
-
-			std::wstring s = t;
-			for (auto& ch : s)
-			{
-				if (ch >= L'A' && ch <= L'Z') ch = static_cast<wchar_t>(ch - L'A' + L'a');
-			}
-			return (s == L"motion" || s == L"motions");
-		};
 
 	std::unordered_map<int, std::vector<TrayMenuItem>> virtualChildren;
 	std::vector<bool> skip(m_model.items.size(), false);
@@ -277,7 +426,7 @@ void TrayMenuWindow::RebuildLayout()
 		const auto& it = m_model.items[i];
 		if (it.kind != TrayMenuItem::Kind::Header && it.kind != TrayMenuItem::Kind::Action) continue;
 		if (!it.children.empty()) continue;
-		if (!isMotionHeaderTitle(it.title)) continue;
+		if (!IsMotionHeaderTitle(it.title)) continue;
 
 		std::vector<TrayMenuItem> kids;
 		size_t j = i + 1;
@@ -411,6 +560,8 @@ void TrayMenuWindow::ShowAt(POINT anchor)
 {
 	m_lastAnchor = anchor;
 	m_hasLastAnchor = true;
+	m_openSubMenuIndex = -1;
+	m_lastRoutedTarget = nullptr;
 	EnsureWindow();
 	if (!m_hWnd) return;
 
@@ -418,9 +569,6 @@ void TrayMenuWindow::ShowAt(POINT anchor)
 	m_scrollOffset = 0;
 	m_hoveredIndex = -1;
 	m_openSubMenuIndex = -1;
-
-	// サブメニューの場合は親の位置に依存した配置ロジックが必要だが、
-	// ShowAtはトップレベル呼び出しを想定。サブメニュー呼び出しは別処理で行う。
 
 	const POINT pos = AdjustAnchorToWorkArea(m_windowSize, anchor);
 
@@ -506,7 +654,12 @@ void TrayMenuWindow::HideLocal()
 	ShowWindow(m_hWnd, SW_HIDE);
 	m_visible = false;
 	m_hoveredIndex = -1;
+
 	m_scrollOffset = 0;
+	if (!m_isSubMenu)
+	{
+		m_lastRoutedTarget = nullptr;
+	}
 }
 
 
@@ -654,20 +807,24 @@ LRESULT TrayMenuWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 	switch (msg)
 	{
 		case WM_SETCURSOR:
+		{
 			if (LOWORD(lParam) == HTCLIENT)
 			{
 				SetCursor(LoadCursor(nullptr, IDC_ARROW));
 				return TRUE;
 			}
 			break;
+		}
 
 		case WM_NCDESTROY:
+		{
 			SetWindowLongPtrW(hWnd, GWLP_USERDATA, 0);
 			if (GetCapture() == hWnd) ReleaseCapture();
 			m_hasCapture = false;
 			m_hWnd = nullptr;
 			m_visible = false;
 			return 0;
+		}
 
 		case WM_CAPTURECHANGED:
 		{
@@ -689,16 +846,12 @@ LRESULT TrayMenuWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 			// それ以外（外部クリックなど）なら閉じる
 			if (!inGuardPeriod && m_visible)
 			{
-				// 親がいる場合、ここでHideすると親のHideも連鎖して呼ばれる
-				// サブメニューがキャプチャを失った場合、親に戻る動作が必要
-
 				// マウスが親ウィンドウの領域内に戻った場合は閉じずに親にキャプチャを返す
-				POINT pt;
+				POINT pt{};
 				GetCursorPos(&pt);
 				if (m_parentWindow && WindowFromPoint(pt) == m_parentWindow->m_hWnd)
 				{
-					// 親へ制御を戻す（親が再キャプチャする）
-					// ReleaseCaptureは既に呼ばれている
+					// ReleaseCapture は既に呼ばれている
 					return 0;
 				}
 
@@ -707,28 +860,30 @@ LRESULT TrayMenuWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 			return 0;
 		}
 
-		        case WM_TIMER :
-		        {
-		            if(wParam == kTimerSubMenuClose)
-		            {
-		                KillTimer(hWnd, kTimerSubMenuClose);
-		                m_subMenuCloseTimerArmed = false;
+		case WM_TIMER:
+		{
+			if (wParam == kTimerSubMenuClose)
+			{
+				KillTimer(hWnd, kTimerSubMenuClose);
+				m_subMenuCloseTimerArmed = false;
 
-		                if(m_subMenu && m_subMenu->m_visible)
-		                {
-		                    POINT spt{};
-		                    GetCursorPos(&spt);
-		                    if(!m_subMenu->ContainsScreenPoint(spt))
-		                    {
-		                        CloseSubMenu();
-		                        InvalidateRect(hWnd, nullptr, FALSE);
-		                    }
-		                }
-		                return 0;
-		            }
-		            break;
-		         }
+				if (m_subMenu && m_subMenu->m_visible)
+				{
+					POINT spt{};
+					GetCursorPos(&spt);
+					if (!m_subMenu->ContainsScreenPoint(spt))
+					{
+						CloseSubMenu();
+						InvalidateRect(hWnd, nullptr, FALSE);
+					}
+				}
+				return 0;
+			}
+			break;
+		}
+
 		case WM_ACTIVATE:
+		{
 			if (LOWORD(wParam) == WA_INACTIVE)
 			{
 				// 親ウィンドウがアクティブなら閉じない
@@ -739,62 +894,67 @@ LRESULT TrayMenuWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 				if (!inGuardPeriod) Hide();
 			}
 			return 0;
+		}
 
-			        case WM_LBUTTONDOWN :
-			        case WM_RBUTTONDOWN :
-			        case WM_MBUTTONDOWN :
-			        case WM_LBUTTONUP :
-			        case WM_RBUTTONUP :
-			        case WM_MBUTTONUP :
-			        case WM_LBUTTONDBLCLK :
-			        case WM_RBUTTONDBLCLK :
-			        case WM_MBUTTONDBLCLK :
-			        {
-			            // Root window holds capture and routes mouse to the deepest submenu under cursor.
-			            if(!m_isSubMenu && GetCapture() == hWnd)
-			            {
-			                RouteCapturedMouseButton(msg, wParam, lParam);
-			                return 0;
-			            }
+		case WM_LBUTTONDOWN:
+		case WM_RBUTTONDOWN:
+		case WM_MBUTTONDOWN:
+		case WM_LBUTTONUP:
+		case WM_RBUTTONUP:
+		case WM_MBUTTONUP:
+		case WM_LBUTTONDBLCLK:
+		case WM_RBUTTONDBLCLK:
+		case WM_MBUTTONDBLCLK:
+		{
+			// Root window holds capture and routes mouse to the deepest submenu under cursor.
+			if (!m_isSubMenu && GetCapture() == hWnd)
+			{
+				RouteCapturedMouseButton(msg, wParam, lParam);
+				return 0;
+			}
 
-			            // Fallback: if we aren't capturing, process locally.
-			            POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-			            RECT rc{};
-			            GetClientRect(hWnd, &rc);
-			            if(!PtInRect(&rc, pt))
-			            {
-			                Hide();
-			                return 0;
-			            }
-			            if(msg == WM_LBUTTONUP)
-			            {
-			                HandleMouse(pt, true);
-			            }
-			            return 0;
-			         }
-				        case WM_MOUSEMOVE :
-			        {
-			            if(!m_isSubMenu && GetCapture() == hWnd)
-			            {
-			                RouteCapturedMouseMove();
-			                return 0;
-			            }
+			// Fallback: if we aren't capturing, process locally.
+			POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+			RECT rc{};
+			GetClientRect(hWnd, &rc);
+			if (!PtInRect(&rc, pt))
+			{
+				Hide();
+				return 0;
+			}
+			if (msg == WM_LBUTTONUP)
+			{
+				HandleMouse(pt, true);
+			}
+			return 0;
+		}
 
-			            if(!m_trackingMouse)
-			            {
-			                TRACKMOUSEEVENT tme{ sizeof(tme) };
-			                tme.dwFlags = TME_LEAVE;
-			                tme.hwndTrack = hWnd;
-			                TrackMouseEvent(&tme);
-			                m_trackingMouse = true;
-			            }
+		case WM_MOUSEMOVE:
+		{
+			if (!m_isSubMenu && GetCapture() == hWnd)
+			{
+				RouteCapturedMouseMove();
+				return 0;
+			}
 
-			            POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-			            HandleMouse(pt, false);
-			            return 0;
-			         }
+			if (!m_trackingMouse)
+			{
+				TRACKMOUSEEVENT tme{ sizeof(tme) };
+				tme.dwFlags = TME_LEAVE;
+				tme.hwndTrack = hWnd;
+				TrackMouseEvent(&tme);
+				m_trackingMouse = true;
+			}
+
+			POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+			HandleMouse(pt, false);
+			return 0;
+		}
+
 		case WM_MOUSELEAVE:
+		{
 			m_trackingMouse = false;
+
 			// サブメニューが開いていない場合のみハイライト解除
 			if (!m_subMenu || !m_subMenu->m_visible)
 			{
@@ -805,27 +965,30 @@ LRESULT TrayMenuWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 				}
 			}
 			return 0;
+		}
 
-			        case WM_MOUSEWHEEL :
-			        {
-			            if(!m_isSubMenu && GetCapture() == hWnd)
-			            {
-			                RouteCapturedMouseWheel(wParam, lParam);
-			                return 0;
-			            }
+		case WM_MOUSEWHEEL:
+		{
+			if (!m_isSubMenu && GetCapture() == hWnd)
+			{
+				RouteCapturedMouseWheel(wParam, lParam);
+				return 0;
+			}
 
-			            const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-			            OnMouseWheelDelta(delta);
-			            return 0;
-			         }
+			const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+			OnMouseWheelDelta(delta);
+			return 0;
+		}
+
 		case WM_KEYDOWN:
+		{
 			if (wParam == VK_ESCAPE)
 			{
 				Hide();
 				return 0;
 			}
-			// サブメニューがある場合、左キーで閉じる等の操作も可能だが省略
 			break;
+		}
 
 		case WM_ERASEBKGND:
 			return 1;
@@ -843,10 +1006,41 @@ LRESULT TrayMenuWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 	return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-
 void TrayMenuWindow::Paint(HDC hdc)
 {
-	const auto& theme = GetTheme();
+	if (!m_hWnd) return;
+
+	RECT rc{};
+	GetClientRect(m_hWnd, &rc);
+	const int width = rc.right - rc.left;
+	const int height = rc.bottom - rc.top;
+	if (width <= 0 || height <= 0) return;
+
+	HDC memDC = CreateCompatibleDC(hdc);
+	HBITMAP memBmp = CreateCompatibleBitmap(hdc, width, height);
+	if (!memDC || !memBmp)
+	{
+		if (memBmp) DeleteObject(memBmp);
+		if (memDC) DeleteDC(memDC);
+		DrawContents(hdc);
+		return;
+	}
+
+	HGDIOBJ oldBmp = SelectObject(memDC, memBmp);
+	SetBkMode(memDC, TRANSPARENT);
+
+	DrawContents(memDC);
+
+	BitBlt(hdc, 0, 0, width, height, memDC, 0, 0, SRCCOPY);
+
+	SelectObject(memDC, oldBmp);
+	DeleteObject(memBmp);
+	DeleteDC(memDC);
+}
+
+void TrayMenuWindow::DrawContents(HDC hdc)
+{
+	const auto& theme = m_theme;
 	RECT rc{};
 	GetClientRect(m_hWnd, &rc);
 
@@ -892,7 +1086,7 @@ void TrayMenuWindow::Paint(HDC hdc)
 
 void TrayMenuWindow::DrawHeader(HDC hdc, int offsetY) const
 {
-	const auto& theme = GetTheme();
+	const auto& theme = m_theme;
 	RECT header{ 0, offsetY, m_windowSize.cx, m_headerHeight + offsetY };
 	HBRUSH hb = CreateSolidBrush(theme.headerBackground);
 	FillRect(hdc, &header, hb);
@@ -925,7 +1119,7 @@ void TrayMenuWindow::DrawHeader(HDC hdc, int offsetY) const
 
 void TrayMenuWindow::DrawItem(HDC hdc, const LayoutItem& item, int offsetY) const
 {
-	const auto& theme = GetTheme();
+	const auto& theme = m_theme;
 	RECT rc = item.bounds;
 	OffsetRect(&rc, 0, offsetY);
 
@@ -1041,35 +1235,7 @@ void TrayMenuWindow::DrawItem(HDC hdc, const LayoutItem& item, int offsetY) cons
 			rc.top + (rc.bottom - rc.top - toggleHeight) / 2 + toggleHeight
 		};
 
-		HBRUSH pillBrush = CreateSolidBrush(item.data.toggled ? theme.accent : theme.outline);
-		HPEN outline = CreatePen(PS_SOLID, 1, item.data.toggled ? theme.accent : theme.outline);
-		HGDIOBJ oldPen = SelectObject(hdc, outline);
-		HGDIOBJ oldBrush = SelectObject(hdc, pillBrush);
-
-		RoundRect(hdc, pill.left, pill.top, pill.right, pill.bottom, Scale(20), Scale(20));
-
-		SelectObject(hdc, oldBrush);
-		SelectObject(hdc, oldPen);
-		DeleteObject(pillBrush);
-		DeleteObject(outline);
-
-		const int knobSize = toggleHeight - Scale(8);
-		const int knobTop = pill.top + Scale(4);
-		int knobLeft = pill.left + Scale(4);
-		if (item.data.toggled)
-		{
-			knobLeft = pill.right - knobSize - Scale(4);
-		}
-		RECT knob{ knobLeft, knobTop, knobLeft + knobSize, knobTop + knobSize };
-		HBRUSH knobBrush = CreateSolidBrush(Rgb(245, 245, 245));
-		HPEN knobPen = CreatePen(PS_SOLID, 1, Rgb(220, 220, 220));
-		oldPen = SelectObject(hdc, knobPen);
-		oldBrush = SelectObject(hdc, knobBrush);
-		Ellipse(hdc, knob.left, knob.top, knob.right, knob.bottom);
-		SelectObject(hdc, oldBrush);
-		DeleteObject(knobBrush);
-		DeleteObject(knobPen);
-		SelectObject(hdc, oldPen);
+		DrawToggleSwitch(hdc, pill, item.data.toggled);
 	}
 
 	SelectObject(hdc, oldFont);
@@ -1077,7 +1243,7 @@ void TrayMenuWindow::DrawItem(HDC hdc, const LayoutItem& item, int offsetY) cons
 
 void TrayMenuWindow::DrawScrollbar(HDC hdc) const
 {
-	const auto& theme = GetTheme();
+	const auto& theme = m_theme;
 	const int trackWidth = Scale(6);
 	RECT rc{};
 	GetClientRect(m_hWnd, &rc);
@@ -1107,6 +1273,61 @@ void TrayMenuWindow::DrawScrollbar(HDC hdc) const
 	DeleteObject(thumbBrush);
 }
 
+void TrayMenuWindow::DrawToggleSwitch(HDC hdc, const RECT& pill, bool toggled) const
+{
+	const auto& theme = m_theme;
+
+	Gdiplus::Graphics g(hdc);
+	g.SetSmoothingMode(Gdiplus::SmoothingModeHighQuality);
+	g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+	g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+
+	const float radius = static_cast<float>(Scale(10));
+	Gdiplus::RectF pillRect(
+		static_cast<Gdiplus::REAL>(pill.left),
+		static_cast<Gdiplus::REAL>(pill.top),
+		static_cast<Gdiplus::REAL>(pill.right - pill.left),
+		static_cast<Gdiplus::REAL>(pill.bottom - pill.top));
+
+	Gdiplus::GraphicsPath path;
+	AddRoundedRect(path, pillRect, radius);
+
+	const COLORREF baseColor = toggled ? theme.accent : theme.outline;
+	Gdiplus::SolidBrush fill(ToColor(baseColor));
+	Gdiplus::Pen outline(ToColor(baseColor), 1.0f);
+	g.FillPath(&fill, &path);
+	g.DrawPath(&outline, &path);
+
+	const int knobMargin = Scale(4);
+	const float knobDiameter = static_cast<float>((pill.bottom - pill.top) - knobMargin * 2);
+	const float knobX = toggled
+		? static_cast<float>(pill.right - knobMargin) - knobDiameter
+		: static_cast<float>(pill.left + knobMargin);
+	const float knobY = static_cast<float>(pill.top + knobMargin);
+
+	Gdiplus::RectF knobRect(knobX, knobY, knobDiameter, knobDiameter);
+
+	Gdiplus::LinearGradientBrush knobBrush(
+		knobRect,
+		Gdiplus::Color(255, 255, 255, 255),
+		Gdiplus::Color(255, 238, 238, 238),
+		Gdiplus::LinearGradientModeVertical);
+	Gdiplus::Pen knobPen(ToColor(Rgb(220, 220, 220)), 1.0f);
+
+	g.FillEllipse(&knobBrush, knobRect);
+	g.DrawEllipse(&knobPen, knobRect);
+
+	// subtle inner glow to keep the switch crisp in dark backgrounds
+	Gdiplus::Pen lightBorder(ToColor(Rgb(255, 255, 255), 64), 1.0f);
+	const float inset = 0.6f;
+	Gdiplus::RectF innerRect(
+		knobRect.X + inset,
+		knobRect.Y + inset,
+		knobRect.Width - inset * 2.0f,
+		knobRect.Height - inset * 2.0f);
+	g.DrawEllipse(&lightBorder, innerRect);
+}
+
 void TrayMenuWindow::HandleMouse(POINT pt, bool activate)
 {
 	int index = -1;
@@ -1117,6 +1338,14 @@ void TrayMenuWindow::HandleMouse(POINT pt, bool activate)
 		if (PtInRect(&rc, pt))
 		{
 			index = static_cast<int>(i);
+
+			if (!activate && index >= 0 && m_subMenu && m_subMenu->m_visible && m_openSubMenuIndex != -1)
+			{
+				if (index != m_openSubMenuIndex)
+				{
+					CloseSubMenu();
+				}
+			}
 
 			// --- ホバー時のサブメニュー制御 ---
 			if (!activate) // MouseMove

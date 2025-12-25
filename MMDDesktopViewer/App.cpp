@@ -16,6 +16,11 @@
 #include <cmath>
 #include <shellapi.h>
 #include <ShObjIdl_core.h>
+#include <commctrl.h>
+#include <uxtheme.h>
+#include <gdiplus.h>
+#pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "uxtheme.lib")
 
 namespace
 {
@@ -96,6 +101,7 @@ App::App(HINSTANCE hInst)
 	m_mediaAudio = std::make_unique<MediaAudioAnalyzer>();
 	m_mediaAudio->SetEnabled(m_settingsData.mediaReactiveEnabled);
 	m_trayMenu = std::make_unique<TrayMenuWindow>(m_hInst, [this](UINT id) { OnTrayCommand(id); });
+	m_trayMenu->SetTheme(TrayMenuThemeId::Light);
 
 	BuildTrayMenu();
 	InitTray();
@@ -607,7 +613,7 @@ void App::BuildTrayMenu()
 		TrayMenuItem::Kind::Toggle,
 		CMD_TOGGLE_PAUSE,
 		paused ? L"再生を再開" : L"一時停止",
-		L"現在のモーションを一時停止 / 再開",
+		L"モーションを一時停止 / 再開",
 		paused
 						  });
 
