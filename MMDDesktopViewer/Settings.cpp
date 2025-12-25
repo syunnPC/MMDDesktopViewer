@@ -310,6 +310,10 @@ AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
 		{
 			settings.unlimitedFps = (value == L"1" || value == L"true" || value == L"True");
 		}
+		else if (key == L"trayMenuTheme" || key == L"trayMenuThemeId")
+		{
+			settings.trayMenuThemeId = ParseInt(value, settings.trayMenuThemeId);
+		}
 		else if (key == L"windowWidth")
 		{
 			settings.windowWidth = ParseInt(value, 0);
@@ -339,6 +343,13 @@ AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
 			ParseLightSettingLine(key, value, settings.light);
 		}
 	}
+
+	// Clamp tray menu theme id to known presets (0..5). "Custom" is not persisted.
+	if (settings.trayMenuThemeId < 0 || settings.trayMenuThemeId > 5)
+	{
+		settings.trayMenuThemeId = 0;
+	}
+
 	return settings;
 }
 
@@ -362,6 +373,7 @@ void SettingsManager::Save(const std::filesystem::path& baseDir,
 	fout << L"alwaysOnTop=" << (settings.alwaysOnTop ? L"1" : L"0") << L"\n";
 	fout << L"targetFps=" << IntToWString(settings.targetFps) << L"\n";
 	fout << L"unlimitedFps=" << (settings.unlimitedFps ? L"1" : L"0") << L"\n";
+	fout << L"trayMenuTheme=" << IntToWString(settings.trayMenuThemeId) << L"\n";
 	fout << L"windowWidth=" << IntToWString(settings.windowWidth) << L"\n";
 	fout << L"windowHeight=" << IntToWString(settings.windowHeight) << L"\n";
 	fout << L"globalPresetMode=" << IntToWString(static_cast<int>(settings.globalPresetMode)) << L"\n";

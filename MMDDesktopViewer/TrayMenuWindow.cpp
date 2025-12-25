@@ -48,7 +48,6 @@ namespace
 
 	TrayMenuTheme MakePresetTheme(TrayMenuThemeId id)
 	{
-		// NOTE: DarkDefault は既存の見た目（旧 Theme の初期値）と同一。
 		switch (id)
 		{
 			case TrayMenuThemeId::DarkDefault:
@@ -711,6 +710,15 @@ void TrayMenuWindow::OpenSubMenu(int index)
 		m_subMenu->SetIsSubMenu(true);
 	}
 
+	if (m_themeId == TrayMenuThemeId::Custom)
+	{
+		m_subMenu->SetTheme(m_theme);
+	}
+	else
+	{
+		m_subMenu->SetTheme(m_themeId);
+	}
+
 	TrayMenuModel subModel;
 	subModel.title = layoutItem.data.title;
 	subModel.subtitle.clear();
@@ -719,16 +727,21 @@ void TrayMenuWindow::OpenSubMenu(int index)
 	m_subMenu->SetModel(subModel);
 	m_openSubMenuIndex = index;
 
-	// サブメニュー側のサイズを先に確定させる（モニター境界に収める）
+	RECT clientRc{};
+	GetClientRect(m_hWnd, &clientRc);
+
+	// Y座標はアイテムの上端に合わせる (スクロール考慮)
 	RECT itemRect = layoutItem.bounds;
 	OffsetRect(&itemRect, 0, -m_scrollOffset);
 
-	POINT ptRight{ itemRect.right, itemRect.top };
-	POINT ptLeft{ itemRect.left, itemRect.top };
-	ClientToScreen(m_hWnd, &ptRight);
-	ClientToScreen(m_hWnd, &ptLeft);
+	// 親ウィンドウの右端・左端（スクリーン座標）
+	POINT ptWindowRight{ clientRc.right, itemRect.top };
+	POINT ptWindowLeft{ clientRc.left, itemRect.top };
+	ClientToScreen(m_hWnd, &ptWindowRight);
+	ClientToScreen(m_hWnd, &ptWindowLeft);
 
-	HMONITOR monitor = MonitorFromPoint(ptRight, MONITOR_DEFAULTTONEAREST);
+	// モニター情報の取得
+	HMONITOR monitor = MonitorFromPoint(ptWindowRight, MONITOR_DEFAULTTONEAREST);
 	MONITORINFO mi{ sizeof(MONITORINFO) };
 	GetMonitorInfoW(monitor, &mi);
 
@@ -744,10 +757,11 @@ void TrayMenuWindow::OpenSubMenu(int index)
 	int desiredW = m_subMenu->m_windowSize.cx;
 	int desiredH = m_subMenu->m_windowSize.cy;
 
-	const int rightSpace = (mi.rcWork.right - margin) - ptRight.x;
-	const int leftSpace = ptLeft.x - (mi.rcWork.left + margin);
+	const int rightSpace = (mi.rcWork.right - margin) - ptWindowRight.x;
+	const int leftSpace = ptWindowLeft.x - (mi.rcWork.left + margin);
 
 	bool openRight = true;
+	// 右側に十分なスペースがあるか、左側より広い場合は右に出す
 	if (desiredW <= rightSpace) openRight = true;
 	else if (desiredW <= leftSpace) openRight = false;
 	else openRight = (rightSpace >= leftSpace);
@@ -757,8 +771,13 @@ void TrayMenuWindow::OpenSubMenu(int index)
 	desiredW = m_subMenu->m_windowSize.cx;
 	desiredH = m_subMenu->m_windowSize.cy;
 
-	int subX = openRight ? ptRight.x : (ptLeft.x - desiredW);
-	int subY = ptRight.y - Scale(4);
+	// 親メニューに「かぶらず」ぴったり隣へ出す。
+	// ※ ClientRect の right はクライアント外側の境界なので、そのまま使えば隣接しつつ重ならない。
+	const int overlap = 0;
+	int subX = openRight ? (ptWindowRight.x - overlap) : (ptWindowLeft.x - desiredW + overlap);
+
+	// Y座標は親アイテムの上端に合わせる（補正しない）
+	int subY = ptWindowRight.y;
 
 	// モニター範囲に収める
 	if (subX < mi.rcWork.left + margin) subX = mi.rcWork.left + margin;
@@ -772,8 +791,6 @@ void TrayMenuWindow::OpenSubMenu(int index)
 	m_subMenu->m_visible = true;
 	m_subMenu->m_openTime = GetTickCount64();
 }
-
-
 
 LRESULT CALLBACK TrayMenuWindow::WndProcThunk(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -1134,6 +1151,11 @@ void TrayMenuWindow::DrawItem(HDC hdc, const LayoutItem& item, int offsetY) cons
 		return;
 	}
 
+	// GDI+ の準備 (アンチエイリアス描画のため共通化)
+	Gdiplus::Graphics g(hdc);
+	g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+	g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+
 	if (item.data.kind == TrayMenuItem::Kind::Header)
 	{
 		HGDIOBJ oldFont = SelectObject(hdc, m_headerFont);
@@ -1150,35 +1172,34 @@ void TrayMenuWindow::DrawItem(HDC hdc, const LayoutItem& item, int offsetY) cons
 		DrawTextW(hdc, item.data.title.c_str(), static_cast<int>(item.data.title.size()), &textRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
 		bool isCollapsed = m_collapsedHeaders.count(item.data.title) > 0;
-		HPEN chevPen = CreatePen(PS_SOLID, 1, theme.textMuted);
-		HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, chevPen));
 
 		int cy = (rc.top + rc.bottom) / 2;
 		int cx = rc.right - Scale(10);
-		int sz = Scale(3);
+		float sz = static_cast<float>(Scale(3)); // サイズ調整
+		float fx = static_cast<float>(cx);
+		float fy = static_cast<float>(cy);
+
+		Gdiplus::Pen chevPen(ToColor(theme.textMuted), 1.5f); // 少し太くする
 
 		if (isCollapsed)
 		{
-			MoveToEx(hdc, cx - sz, cy - sz, nullptr);
-			LineTo(hdc, cx + sz / 2, cy);
-			LineTo(hdc, cx - sz, cy + sz);
+			// 下向き (v)
+			g.DrawLine(&chevPen, fx - sz, fy - sz * 0.5f, fx, fy + sz * 0.5f);
+			g.DrawLine(&chevPen, fx, fy + sz * 0.5f, fx + sz, fy - sz * 0.5f);
 		}
 		else
 		{
-			MoveToEx(hdc, cx - sz, cy - sz / 2, nullptr);
-			LineTo(hdc, cx, cy + sz / 2);
-			LineTo(hdc, cx + sz, cy - sz / 2);
+			// 上向き (^)
+			g.DrawLine(&chevPen, fx - sz, fy + sz * 0.5f, fx, fy - sz * 0.5f);
+			g.DrawLine(&chevPen, fx, fy - sz * 0.5f, fx + sz, fy + sz * 0.5f);
 		}
 
-		SelectObject(hdc, oldPen);
-		DeleteObject(chevPen);
 		SelectObject(hdc, oldFont);
 		return;
 	}
 
 	const LayoutItem* ptr = &item;
 	const bool hovered = static_cast<int>(ptr - m_layout.data()) == m_hoveredIndex;
-	// サブメニューが開いているアイテムはずっとホバー表示にする
 	const bool subMenuOpen = (m_openSubMenuIndex != -1 && static_cast<int>(ptr - m_layout.data()) == m_openSubMenuIndex);
 
 	if (hovered || subMenuOpen)
@@ -1195,7 +1216,11 @@ void TrayMenuWindow::DrawItem(HDC hdc, const LayoutItem& item, int offsetY) cons
 
 	HGDIOBJ oldFont = SelectObject(hdc, m_bodyFont);
 	SetTextColor(hdc, item.data.destructive ? theme.danger : theme.textPrimary);
-	DrawTextW(hdc, item.data.title.c_str(), static_cast<int>(item.data.title.size()), &textRc, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+	// サブタイトル無しの行は縦中央にして、右側の矢印/チェック/トグルと視覚的に揃える
+	const UINT titleFmt = item.data.subtitle.empty()
+		? (DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS)
+		: (DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+	DrawTextW(hdc, item.data.title.c_str(), static_cast<int>(item.data.title.size()), &textRc, titleFmt);
 
 	if (!item.data.subtitle.empty())
 	{
@@ -1205,25 +1230,38 @@ void TrayMenuWindow::DrawItem(HDC hdc, const LayoutItem& item, int offsetY) cons
 		DrawTextW(hdc, item.data.subtitle.c_str(), static_cast<int>(item.data.subtitle.size()), &subRc, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
 	}
 
-	// サブメニュー用の矢印 (>)
 	if (!item.data.children.empty())
 	{
-		HPEN arrowPen = CreatePen(PS_SOLID, 1, theme.textMuted);
-		HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, arrowPen));
-
 		int cy = (rc.top + rc.bottom) / 2;
 		int cx = rc.right - Scale(10);
-		int sz = Scale(3);
+		float sz = static_cast<float>(Scale(3));
+		float fx = static_cast<float>(cx);
+		float fy = static_cast<float>(cy);
 
-		MoveToEx(hdc, cx - sz, cy - sz, nullptr);
-		LineTo(hdc, cx + sz / 2, cy);
-		LineTo(hdc, cx - sz, cy + sz);
+		Gdiplus::Pen arrowPen(ToColor(theme.textMuted), 1.5f);
 
-		SelectObject(hdc, oldPen);
-		DeleteObject(arrowPen);
+		// ">" の形状
+		g.DrawLine(&arrowPen, fx - sz, fy - sz, fx + sz * 0.5f, fy);
+		g.DrawLine(&arrowPen, fx + sz * 0.5f, fy, fx - sz, fy + sz);
 	}
 
-	if (item.data.kind == TrayMenuItem::Kind::Toggle)
+	if (item.data.kind == TrayMenuItem::Kind::Action && item.data.toggled)
+	{
+		// チェックマークの位置（右端、Toggleスイッチと同じあたり）
+		int toggleWidth = Scale(46); // スイッチの幅分確保したスペースを利用
+		int marginRight = Scale(18);
+
+		float cx = static_cast<float>(rc.right - marginRight - toggleWidth / 2);
+		float cy = static_cast<float>((rc.top + rc.bottom) / 2);
+		float sz = static_cast<float>(Scale(5));
+
+		Gdiplus::Pen checkPen(ToColor(theme.accent), 2.0f);
+
+		// チェックマーク形状 (レ点)
+		g.DrawLine(&checkPen, cx - sz, cy, cx - sz * 0.3f, cy + sz);
+		g.DrawLine(&checkPen, cx - sz * 0.3f, cy + sz, cx + sz, cy - sz * 0.8f);
+	}
+	else if (item.data.kind == TrayMenuItem::Kind::Toggle)
 	{
 		const int toggleWidth = Scale(46);
 		const int toggleHeight = Scale(24);

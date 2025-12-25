@@ -26,6 +26,21 @@ namespace
 {
 	constexpr UINT kDefaultTimerMs = 16;
 
+	static TrayMenuThemeId ClampTrayMenuThemeId(int v)
+	{
+		// Persisted values: 0..5 (Custom is not persisted)
+		switch (v)
+		{
+			case 0: return TrayMenuThemeId::DarkDefault;
+			case 1: return TrayMenuThemeId::Light;
+			case 2: return TrayMenuThemeId::Midnight;
+			case 3: return TrayMenuThemeId::Sakura;
+			case 4: return TrayMenuThemeId::SolarizedDark;
+			case 5: return TrayMenuThemeId::HighContrast;
+			default: return TrayMenuThemeId::DarkDefault;
+		}
+	}
+
 	enum TrayCmd : UINT
 	{
 		CMD_OPEN_SETTINGS = 100,
@@ -39,6 +54,13 @@ namespace
 		CMD_TOGGLE_AUTOBLINK = 107,
 		CMD_TOGGLE_BREATH = 108,
 		CMD_TOGGLE_MEDIA_REACTIVE = 109,
+
+		CMD_THEME_DARK = 200,
+		CMD_THEME_LIGHT = 201,
+		CMD_THEME_MIDNIGHT = 202,
+		CMD_THEME_SAKURA = 203,
+		CMD_THEME_SOLARIZED = 204,
+		CMD_THEME_HIGHCONTRAST = 205,
 		CMD_MOTION_BASE = 1000
 	};
 }
@@ -101,7 +123,13 @@ App::App(HINSTANCE hInst)
 	m_mediaAudio = std::make_unique<MediaAudioAnalyzer>();
 	m_mediaAudio->SetEnabled(m_settingsData.mediaReactiveEnabled);
 	m_trayMenu = std::make_unique<TrayMenuWindow>(m_hInst, [this](UINT id) { OnTrayCommand(id); });
-	m_trayMenu->SetTheme(TrayMenuThemeId::Light);
+
+	// 起動時に設定ファイルのテーマを適用
+	{
+		const TrayMenuThemeId theme = ClampTrayMenuThemeId(m_settingsData.trayMenuThemeId);
+		m_trayMenu->SetTheme(theme);
+		m_settingsData.trayMenuThemeId = static_cast<int>(theme);
+	}
 
 	BuildTrayMenu();
 	InitTray();
@@ -602,6 +630,31 @@ void App::BuildTrayMenu()
 	model.items.push_back(TrayMenuItem{
 		TrayMenuItem::Kind::Action, CMD_OPEN_SETTINGS, L"設定", L"描画・ライティング・プリセットを編集"
 						  });
+
+	// --- テーマメニュー追加 ---
+	TrayMenuItem themeMenu;
+	themeMenu.title = L"テーマ";
+	themeMenu.kind = TrayMenuItem::Kind::Action;
+
+	TrayMenuThemeId currentTheme = m_trayMenu->GetThemeId();
+	auto addThemeItem = [&](const std::wstring& name, UINT cmdId, TrayMenuThemeId targetTheme) {
+		TrayMenuItem item;
+		item.title = name;
+		item.commandId = cmdId;
+		item.kind = TrayMenuItem::Kind::Action;
+		item.toggled = (currentTheme == targetTheme);
+		themeMenu.children.push_back(item);
+		};
+
+	addThemeItem(L"ダーク (既定)", CMD_THEME_DARK, TrayMenuThemeId::DarkDefault);
+	addThemeItem(L"ライト", CMD_THEME_LIGHT, TrayMenuThemeId::Light);
+	addThemeItem(L"ミッドナイト", CMD_THEME_MIDNIGHT, TrayMenuThemeId::Midnight);
+	addThemeItem(L"桜 (Sakura)", CMD_THEME_SAKURA, TrayMenuThemeId::Sakura);
+	addThemeItem(L"ソーラー", CMD_THEME_SOLARIZED, TrayMenuThemeId::SolarizedDark);
+	addThemeItem(L"ハイコントラスト", CMD_THEME_HIGHCONTRAST, TrayMenuThemeId::HighContrast);
+	model.items.push_back(themeMenu);
+	// -----------------------
+
 	model.items.push_back(TrayMenuItem{
 		TrayMenuItem::Kind::Toggle, CMD_TOGGLE_WINDOW_MANIP, L"ウィンドウ操作モード", L"Ctrl+Alt+R で切り替え", m_windowManager.IsWindowManipulationMode()
 						  });
@@ -861,6 +914,13 @@ void App::SaveSettings()
 		m_settingsData.light = m_renderer->GetLightSettings();
 	}
 
+	// 現在のタスクトレイメニューのテーマを保存
+	if (m_trayMenu)
+	{
+		const TrayMenuThemeId theme = ClampTrayMenuThemeId(static_cast<int>(m_trayMenu->GetThemeId()));
+		m_settingsData.trayMenuThemeId = static_cast<int>(theme);
+	}
+
 	SettingsManager::Save(m_baseDir, m_settingsData);
 
 	if (!m_settingsData.modelPath.empty())
@@ -971,6 +1031,42 @@ void App::OnTrayCommand(UINT id)
 		case CMD_TOGGLE_WINDOW_MANIP:
 			m_windowManager.ToggleWindowManipulationMode();
 			BuildTrayMenu();
+			break;
+
+		case CMD_THEME_DARK:
+			m_trayMenu->SetTheme(TrayMenuThemeId::DarkDefault);
+			m_settingsData.trayMenuThemeId = static_cast<int>(TrayMenuThemeId::DarkDefault);
+			SaveSettings();
+			break;
+
+		case CMD_THEME_LIGHT:
+			m_trayMenu->SetTheme(TrayMenuThemeId::Light);
+			m_settingsData.trayMenuThemeId = static_cast<int>(TrayMenuThemeId::Light);
+			SaveSettings();
+			break;
+
+		case CMD_THEME_MIDNIGHT:
+			m_trayMenu->SetTheme(TrayMenuThemeId::Midnight);
+			m_settingsData.trayMenuThemeId = static_cast<int>(TrayMenuThemeId::Midnight);
+			SaveSettings();
+			break;
+
+		case CMD_THEME_SAKURA:
+			m_trayMenu->SetTheme(TrayMenuThemeId::Sakura);
+			m_settingsData.trayMenuThemeId = static_cast<int>(TrayMenuThemeId::Sakura);
+			SaveSettings();
+			break;
+
+		case CMD_THEME_SOLARIZED:
+			m_trayMenu->SetTheme(TrayMenuThemeId::SolarizedDark);
+			m_settingsData.trayMenuThemeId = static_cast<int>(TrayMenuThemeId::SolarizedDark);
+			SaveSettings();
+			break;
+
+		case CMD_THEME_HIGHCONTRAST:
+			m_trayMenu->SetTheme(TrayMenuThemeId::HighContrast);
+			m_settingsData.trayMenuThemeId = static_cast<int>(TrayMenuThemeId::HighContrast);
+			SaveSettings();
 			break;
 
 		case CMD_EXIT:
