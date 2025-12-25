@@ -118,6 +118,7 @@ private:
 	void EndSubStep(float dt, const PmxModel& model);
 
 	void WriteBackBones(const PmxModel& model, BoneSolver& bones);
+	void BuildWriteBackOrder(const PmxModel& model);
 
 	static DirectX::XMVECTOR Load3(const DirectX::XMFLOAT3& v);
 	static DirectX::XMVECTOR Load4(const DirectX::XMFLOAT4& v);
@@ -174,4 +175,15 @@ private:
 	std::vector<SapNode> m_axisList;
 	std::vector<float> m_radii;
 	std::vector<float> m_maxXs;
+	std::vector<int> m_bodyToAxisIndex;
+	bool m_axisListInitialized{ false };
+
+	std::vector<int> m_writeBackOrder;
+	std::vector<uint8_t> m_keepTranslationFlags;
+	std::vector<DirectX::XMFLOAT4X4> m_desiredGlobals;
+	std::vector<DirectX::XMFLOAT4X4> m_appliedGlobals;
+	std::vector<uint8_t> m_hasDesiredGlobal;
+	std::vector<uint8_t> m_hasAppliedGlobal;
+	std::vector<DirectX::XMFLOAT3> m_originalLocalTranslation;
+	bool m_writebackFallbackNoAfterPhysics{ false };
 };

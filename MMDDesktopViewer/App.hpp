@@ -84,6 +84,8 @@ private:
 	void OnTrayCommand(UINT id);
 	void ShowTrayMenu(const POINT& anchor);
 	void OnTimer();
+	void Update();
+	void Render();
 
 	HINSTANCE m_hInst{};
 
@@ -105,6 +107,9 @@ private:
 	std::filesystem::path m_motionsDir;
 
 	std::vector<std::filesystem::path> m_motionFiles;
+
+	ULONG_PTR m_gdiplusToken{};
+	bool m_gdiplusInitialized{ false };
 
 	bool m_comInitialized{ false };
 

@@ -24,6 +24,12 @@
 
 namespace
 {
+	struct ModelLoadResult
+	{
+		std::unique_ptr<PmxModel> model;
+		std::wstring errorMessage;
+	};
+
 	static TrayMenuThemeId ClampTrayMenuThemeId(int v)
 	{
 		// Persisted values: 0..5 (Custom is not persisted)
@@ -78,18 +84,14 @@ App::App(HINSTANCE hInst)
 			[this]() { SaveSettings(); }
 		})
 {
-	HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-	if (SUCCEEDED(hr))
+	Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+	if (Gdiplus::GdiplusStartup(&m_gdiplusToken, &gdiplusStartupInput, nullptr) == Gdiplus::Ok)
 	{
-		m_comInitialized = true;
-	}
-	else if (hr == RPC_E_CHANGED_MODE)
-	{
-		m_comInitialized = false;
+		m_gdiplusInitialized = true;
 	}
 	else
 	{
-		throw std::runtime_error("CoInitializeEx failed.");
+		throw std::runtime_error("GdiplusStartup failed.");
 	}
 
 	SetCurrentProcessExplicitAppUserModelID(L"MMDDesk");
@@ -143,9 +145,9 @@ App::~App()
 
 	m_input.UnregisterHotkeys(m_windowManager.RenderWindow());
 
-	if (m_comInitialized)
+	if (m_gdiplusInitialized)
 	{
-		CoUninitialize();
+		Gdiplus::GdiplusShutdown(m_gdiplusToken);
 	}
 }
 
@@ -329,7 +331,24 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 	m_loadThread = std::jthread([this, path](std::stop_token stopToken) {
 		HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-		PmxModel* loadedModelPtr = nullptr;
+		auto result = std::make_unique<ModelLoadResult>();
+
+		auto toWide = [](std::string_view src) -> std::wstring
+			{
+				if (src.empty()) return {};
+				UINT cp = CP_UTF8;
+				int len = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, src.data(), static_cast<int>(src.size()), nullptr, 0);
+				if (len <= 0)
+				{
+					cp = CP_ACP;
+					len = MultiByteToWideChar(cp, 0, src.data(), static_cast<int>(src.size()), nullptr, 0);
+				}
+				if (len <= 0) return {};
+				std::wstring out(static_cast<size_t>(len), L'\0');
+				DWORD flags = (cp == CP_UTF8) ? MB_ERR_INVALID_CHARS : 0;
+				MultiByteToWideChar(cp, flags, src.data(), static_cast<int>(src.size()), out.data(), len);
+				return out;
+			};
 
 		try
 		{
@@ -361,33 +380,38 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 				}
 
 				// 所有権を移動するためにrelease()する
-				loadedModelPtr = newModel.release();
+				result->model = std::move(newModel);
 			}
 		}
 		catch (const std::exception& e)
 		{
 			auto buf = std::format("Model Load Error: {}\n", e.what());
 			OutputDebugStringA(buf.c_str());
-			loadedModelPtr = nullptr; // 失敗扱い
+			result->errorMessage = toWide(e.what());
 		}
 		catch (...)
 		{
 			OutputDebugStringA("Model Load Error: Unknown exception\n");
-			loadedModelPtr = nullptr;
+			result->errorMessage = L"モデルの読み込み中に不明な例外が発生しました。";
 		}
 
 		// 完了通知 (成功時はポインタ、失敗時はnullptr)
-		if (!stopToken.stop_requested())
+		if (stopToken.stop_requested())
 		{
-			if (HWND msgWnd = m_windowManager.MessageWindow())
+			if (SUCCEEDED(hr))
 			{
-				PostMessage(msgWnd, WindowManager::kLoadCompleteMessage, 0, reinterpret_cast<LPARAM>(loadedModelPtr));
+				CoUninitialize();
 			}
+			return;
 		}
-		else if (loadedModelPtr)
+
+		if (HWND msgWnd = m_windowManager.MessageWindow())
 		{
-			delete loadedModelPtr;
-			loadedModelPtr = nullptr;
+			ModelLoadResult* rawResult = result.get();
+			if (PostMessage(msgWnd, WindowManager::kLoadCompleteMessage, 0, reinterpret_cast<LPARAM>(rawResult)))
+			{
+				result.release();
+			}
 		}
 
 		if (SUCCEEDED(hr))
@@ -409,6 +433,14 @@ void App::CancelLoadingThread()
 }
 
 void App::OnTimer()
+{
+	if (m_isLoading) return;
+
+	Update();
+	Render();
+}
+
+void App::Update()
 {
 	if (m_isLoading) return;
 
@@ -514,6 +546,11 @@ void App::OnTimer()
 		}
 		m_animator->Update();
 	}
+}
+
+void App::Render()
+{
+	if (m_isLoading) return;
 
 	if (m_renderer && m_animator)
 	{
@@ -1151,21 +1188,24 @@ void App::OnTrayCommand(UINT id)
 
 void App::OnLoadComplete(WPARAM, LPARAM lParam)
 {
-	PmxModel* rawPtr = reinterpret_cast<PmxModel*>(lParam);
+	std::unique_ptr<ModelLoadResult> result(reinterpret_cast<ModelLoadResult*>(lParam));
 
-	if (rawPtr)
+	if (result && result->model)
 	{
-		std::unique_ptr<PmxModel> model(rawPtr);
 		// アニメーターにセット
 		if (m_animator)
 		{
-			m_animator->SetModel(std::move(model));
+			m_animator->SetModel(std::move(result->model));
 			m_animator->Update();
 		}
 	}
 	else
 	{
-		MessageBoxW(m_windowManager.RenderWindow(), L"モデルの読み込みに失敗しました。", L"エラー", MB_ICONERROR);
+		const std::wstring message = (result && !result->errorMessage.empty())
+			? result->errorMessage
+			: std::wstring(L"モデルの読み込みに失敗しました。");
+
+		MessageBoxW(m_windowManager.RenderWindow(), message.c_str(), L"エラー", MB_ICONERROR);
 	}
 
 	if (m_progress)
