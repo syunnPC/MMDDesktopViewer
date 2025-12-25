@@ -347,6 +347,8 @@ public:
 	}
 
 private:
+	friend class PmxLoader;
+
 	std::wstring ReadPmxText(BinaryReader& br) const;
 	int32_t ReadIndexSigned(BinaryReader& br, std::uint8_t size) const;
 	uint32_t ReadIndexUnsigned(BinaryReader& br, std::uint8_t size) const;

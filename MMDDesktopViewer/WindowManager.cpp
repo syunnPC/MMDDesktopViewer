@@ -119,7 +119,8 @@ void WindowManager::ApplyTopmost(bool alwaysOnTop) const
 void WindowManager::UpdateTimerInterval(UINT intervalMs)
 {
 	if (!m_msgWnd) return;
-	SetTimer(m_msgWnd, kTimerId, intervalMs, nullptr);
+	KillTimer(m_msgWnd, kTimerId);
+	(void)intervalMs;
 }
 
 void WindowManager::ToggleGizmoWindow()

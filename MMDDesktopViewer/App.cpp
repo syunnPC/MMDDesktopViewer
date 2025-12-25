@@ -24,8 +24,6 @@
 
 namespace
 {
-	constexpr UINT kDefaultTimerMs = 16;
-
 	static TrayMenuThemeId ClampTrayMenuThemeId(int v)
 	{
 		// Persisted values: 0..5 (Custom is not persisted)
@@ -120,6 +118,7 @@ App::App(HINSTANCE hInst)
 
 	InitRenderer();
 	InitAnimator();
+
 	m_mediaAudio = std::make_unique<MediaAudioAnalyzer>();
 	m_mediaAudio->SetEnabled(m_settingsData.mediaReactiveEnabled);
 	m_trayMenu = std::make_unique<TrayMenuWindow>(m_hInst, [this](UINT id) { OnTrayCommand(id); });
@@ -139,6 +138,7 @@ App::App(HINSTANCE hInst)
 
 App::~App()
 {
+	CancelLoadingThread();
 	SaveSettings();
 
 	m_input.UnregisterHotkeys(m_windowManager.RenderWindow());
@@ -151,13 +151,44 @@ App::~App()
 
 int App::Run()
 {
+	using clock = std::chrono::steady_clock;
 	MSG msg{};
-	while (GetMessageW(&msg, nullptr, 0, 0))
+	auto nextTick = clock::now();
+	m_frameInterval = std::chrono::milliseconds(m_timerIntervalMs);
+
+	while (true)
 	{
-		TranslateMessage(&msg);
-		DispatchMessageW(&msg);
+		while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+		{
+			if (msg.message == WM_QUIT)
+			{
+				return static_cast<int>(msg.wParam);
+			}
+			TranslateMessage(&msg);
+			DispatchMessageW(&msg);
+		}
+
+		const auto now = clock::now();
+		if (now >= nextTick)
+		{
+			OnTimer();
+			// Allow dynamic FPS changes without restarting the loop.
+			m_frameInterval = std::chrono::milliseconds(m_timerIntervalMs);
+			nextTick = now + m_frameInterval;
+			continue;
+		}
+
+		const auto sleepFor = nextTick - now;
+		if (sleepFor > std::chrono::milliseconds(1))
+		{
+			// Sleep a little less than the remaining budget to reduce overshoot.
+			std::this_thread::sleep_for(sleepFor - std::chrono::milliseconds(1));
+		}
+		else
+		{
+			std::this_thread::yield();
+		}
 	}
-	return static_cast<int>(msg.wParam);
 }
 
 void App::LoadModelFromSettings()
@@ -283,8 +314,6 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 		}
 	}
 
-	m_isLoading = true;
-
 	if (!m_progress)
 	{
 		m_progress = std::make_unique<ProgressWindow>(m_hInst, m_windowManager.RenderWindow());
@@ -293,8 +322,11 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 	m_progress->SetMessage(L"読み込み開始...");
 	m_progress->SetProgress(0.0f);
 
+	CancelLoadingThread();
+	m_isLoading = true;
+
 	// ワーカースレッド起動
-	std::thread([this, path]() {
+	m_loadThread = std::jthread([this, path](std::stop_token stopToken) {
 		HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
 		PmxModel* loadedModelPtr = nullptr;
@@ -304,7 +336,8 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 			auto newModel = std::make_unique<PmxModel>();
 
 			// 1. PMXファイル解析
-			bool res = newModel->Load(path, [this](float p, const wchar_t* msg) {
+			bool res = newModel->Load(path, [this, &stopToken](float p, const wchar_t* msg) {
+				if (stopToken.stop_requested()) return;
 				if (m_progress)
 				{
 					m_progress->SetMessage(msg);
@@ -312,12 +345,13 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 				}
 									  });
 
-			if (res)
+			if (res && !stopToken.stop_requested())
 			{
 				// 2. テクスチャの先行読み込み
 				if (m_renderer)
 				{
-					m_renderer->LoadTexturesForModel(newModel.get(), [this](float p, const wchar_t* msg) {
+					m_renderer->LoadTexturesForModel(newModel.get(), [this, &stopToken](float p, const wchar_t* msg) {
+						if (stopToken.stop_requested()) return;
 						if (m_progress)
 						{
 							m_progress->SetMessage(msg);
@@ -343,14 +377,35 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 		}
 
 		// 完了通知 (成功時はポインタ、失敗時はnullptr)
-		PostMessage(m_windowManager.MessageWindow(), WindowManager::kLoadCompleteMessage, 0, reinterpret_cast<LPARAM>(loadedModelPtr));
+		if (!stopToken.stop_requested())
+		{
+			if (HWND msgWnd = m_windowManager.MessageWindow())
+			{
+				PostMessage(msgWnd, WindowManager::kLoadCompleteMessage, 0, reinterpret_cast<LPARAM>(loadedModelPtr));
+			}
+		}
+		else if (loadedModelPtr)
+		{
+			delete loadedModelPtr;
+			loadedModelPtr = nullptr;
+		}
 
 		if (SUCCEEDED(hr))
 		{
 			CoUninitialize();
 		}
 
-				}).detach();
+								});
+}
+
+void App::CancelLoadingThread()
+{
+	if (m_loadThread.joinable())
+	{
+		m_loadThread.request_stop();
+		m_loadThread.join();
+	}
+	m_isLoading = false;
 }
 
 void App::OnTimer()
@@ -818,7 +873,7 @@ UINT App::ComputeTimerIntervalMs() const
 void App::UpdateTimerInterval()
 {
 	m_timerIntervalMs = ComputeTimerIntervalMs();
-	m_windowManager.UpdateTimerInterval(m_timerIntervalMs);
+	m_frameInterval = std::chrono::milliseconds(m_timerIntervalMs);
 }
 
 void App::ApplySettings(const AppSettings& settings, bool persist)

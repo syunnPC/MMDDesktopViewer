@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <thread>
+#include <chrono>
 #include "ProgressWindow.hpp"
 #include "TrayIcon.hpp"
 #include "DcompRenderer.hpp"
@@ -14,6 +16,8 @@
 #include "WindowManager.hpp"
 #include "AudioReactiveState.hpp"
 #include "TrayMenuWindow.hpp"
+
+constexpr UINT kDefaultTimerMs = 16;
 
 class SettingsWindow;
 class MediaAudioAnalyzer;
@@ -109,9 +113,14 @@ private:
 	// ローディング関連
 	std::unique_ptr<ProgressWindow> m_progress;
 	std::atomic<bool> m_isLoading{ false };
+	std::jthread m_loadThread;
 
 	void StartLoadingModel(const std::filesystem::path& path);
 	void OnLoadComplete(WPARAM wParam, LPARAM lParam);
+
+	void CancelLoadingThread();
+
+	std::chrono::milliseconds m_frameInterval{ kDefaultTimerMs };
 
 	bool m_lookAtEnabled{ false };
 };

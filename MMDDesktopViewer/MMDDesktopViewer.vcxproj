@@ -205,6 +205,8 @@
     <ClCompile Include="MediaAudioAnalyzer.cpp" />
     <ClCompile Include="MmdAnimator.cpp" />
     <ClCompile Include="MmdPhysicsWorld.cpp" />
+    <ClCompile Include="PmxLoader.cpp" />
+    <ClInclude Include="PmxLoader.hpp" />
     <ClCompile Include="PmxModel.cpp" />
     <ClCompile Include="PmxModelDrawer.cpp" />
     <ClCompile Include="ProgressWindow.cpp" />

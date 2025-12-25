@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <vector>
 #include <queue>
+#include <span>
 
 using namespace DirectX;
 
@@ -832,7 +833,7 @@ void MmdPhysicsWorld::BuildFromModel(const PmxModel& model, const BoneSolver& bo
 
 	const int n = static_cast<int>(m_bodies.size());
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if(n >= 256)
+#pragma omp parallel for schedule(static) if(n >= 512)
 #endif
 	for (int i = 0; i < n; ++i)
 	{
@@ -1102,7 +1103,7 @@ void MmdPhysicsWorld::InterpolateKinematicBodies(float t)
 {
 	const int n = static_cast<int>(m_bodies.size());
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if(n >= 256)
+#pragma omp parallel for schedule(static) if(n >= 512)
 #endif
 	for (int i = 0; i < n; ++i)
 	{
@@ -1149,7 +1150,7 @@ void MmdPhysicsWorld::Integrate(float dt, const PmxModel& model)
 
 	const int n = static_cast<int>(m_bodies.size());
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if(n >= 256)
+#pragma omp parallel for schedule(static) if(n >= 512)
 #endif
 	for (int i = 0; i < n; ++i)
 	{
@@ -1184,36 +1185,42 @@ void MmdPhysicsWorld::SolveXPBD(float dt, const PmxModel& model)
 void MmdPhysicsWorld::SolveBodyCollisions(float dt)
 {
 	if (!m_settings.enableRigidBodyCollisions) return;
-	const int bodyCount = static_cast<int>(m_bodies.size());
+	const size_t bodyCount = m_bodies.size();
 	if (bodyCount < 2) return;
+	const int bodyCountInt = static_cast<int>(bodyCount);
 
 	// --- 1. 形状キャッシュの更新 (並列化) ---
 	// ワールド座標系の形状データを一括計算し、後の判定ループでの計算コストを削減
 
-	if (m_shapeCache.size() != m_bodies.size())
+	if (m_shapeCache.size() < m_bodies.size())
 	{
 		m_shapeCache.resize(m_bodies.size());
 	}
 
 	// SAP用バッファのリサイズ
-	if (m_axisList.size() != m_bodies.size())
+	if (m_axisList.size() < m_bodies.size())
 	{
 		m_axisList.resize(m_bodies.size());
 		m_radii.resize(m_bodies.size());
 		m_maxXs.resize(m_bodies.size());
 	}
 
+	std::span<CollisionShapeCache> shapeCache{ m_shapeCache.data(), bodyCount };
+	std::span<SapNode> axisList{ m_axisList.data(), bodyCount };
+	std::span<float> radii{ m_radii.data(), bodyCount };
+	std::span<float> maxXs{ m_maxXs.data(), bodyCount };
+
 	const float radiusScale = m_settings.collisionRadiusScale;
 	const float collisionMargin = m_settings.collisionMargin;
 	const float kPhantomMargin = std::max(0.0f, m_settings.phantomMargin);
 
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if(bodyCount >= 128)
+#pragma omp parallel for schedule(static) if(bodyCount >= 512)
 #endif
-	for (int i = 0; i < bodyCount; ++i)
+	for (int i = 0; i < bodyCountInt; ++i)
 	{
 		const Body& b = m_bodies[i];
-		CollisionShapeCache& cache = m_shapeCache[i];
+		CollisionShapeCache& cache = shapeCache[static_cast<size_t>(i)];
 
 		using namespace DirectX;
 		XMVECTOR c = XMLoadFloat3(&b.position);
@@ -1251,7 +1258,7 @@ void MmdPhysicsWorld::SolveBodyCollisions(float dt)
 			maxX = cx + extX;
 
 			// バウンディング球半径 (保守的)
-			m_radii[i] = std::sqrt(cache.ex * cache.ex + cache.ey * cache.ey + cache.ez * cache.ez)
+			radii[static_cast<size_t>(i)] = std::sqrt(cache.ex * cache.ex + cache.ey * cache.ey + cache.ez * cache.ez)
 				+ collisionMargin + extra;
 		}
 		else
@@ -1279,11 +1286,11 @@ void MmdPhysicsWorld::SolveBodyCollisions(float dt)
 			minX = std::min(x0, x1) - rTotal;
 			maxX = std::max(x0, x1) + rTotal;
 
-			m_radii[i] = b.capsuleHalfHeight + cache.radius + collisionMargin + extra;
+			radii[static_cast<size_t>(i)] = b.capsuleHalfHeight + cache.radius + collisionMargin + extra;
 		}
 
-		m_axisList[i] = { minX, i };
-		m_maxXs[i] = maxX;
+		axisList[static_cast<size_t>(i)] = { minX, i };
+		maxXs[static_cast<size_t>(i)] = maxX;
 	}
 
 	auto shouldCollide = [&](int i, int j) -> bool
@@ -1320,33 +1327,46 @@ void MmdPhysicsWorld::SolveBodyCollisions(float dt)
 		};
 
 	// --- 2. Broadphase (SAP) ---
-	// 前フレームのソート状態を利用するため挿入ソートが望ましいが、
-	// ここではstd::sortを使用 (十分高速)
-	std::sort(m_axisList.begin(), m_axisList.end(),
-			  [](const SapNode& a, const SapNode& b) { return a.minX < b.minX; });
+	// 前フレームからほぼ整列している前提で挿入ソートを使用し、O(N) に近いコストで更新する。
+	auto insertionSort = [](std::span<SapNode> nodes)
+		{
+			for (size_t i = 1; i < nodes.size(); ++i)
+			{
+				SapNode key = nodes[i];
+				size_t j = i;
+				while (j > 0 && key.minX < nodes[j - 1].minX)
+				{
+					nodes[j] = nodes[j - 1];
+					--j;
+				}
+				nodes[j] = key;
+			}
+		};
+	insertionSort(axisList);
 
 	m_candidates.clear();
 	// 適切な予約サイズ確保 (前回のサイズ等を参考にするとより良い)
-	if (m_candidates.capacity() < (size_t)bodyCount * 4)
+	const size_t candidateHint = bodyCount * 4;
+	if (m_candidates.capacity() < candidateHint)
 	{
-		m_candidates.reserve((size_t)bodyCount * 8);
+		m_candidates.reserve(bodyCount * 8);
 	}
 
-	for (int i = 0; i < bodyCount; ++i)
+	for (int i = 0; i < bodyCountInt; ++i)
 	{
-		const int idxA = m_axisList[i].index;
-		const float maxX_A = m_maxXs[idxA];
+		const int idxA = axisList[static_cast<size_t>(i)].index;
+		const float maxX_A = maxXs[static_cast<size_t>(idxA)];
 
 		// 静的オブジェクト同士の衝突を除外するためのフラグ
 		const bool isStaticA = (m_bodies[idxA].invMass <= 0.0f);
 		using namespace DirectX;
 		XMVECTOR posA = XMLoadFloat3(&m_bodies[idxA].position);
 
-		for (int j = i + 1; j < bodyCount; ++j)
+		for (int j = i + 1; j < bodyCountInt; ++j)
 		{
-			if (m_axisList[j].minX > maxX_A) break;
+			if (axisList[static_cast<size_t>(j)].minX > maxX_A) break;
 
-			const int idxB = m_axisList[j].index;
+			const int idxB = axisList[static_cast<size_t>(j)].index;
 
 			// 両方Staticなら無視
 			if (isStaticA && m_bodies[idxB].invMass <= 0.0f) continue;
@@ -1359,7 +1379,7 @@ void MmdPhysicsWorld::SolveBodyCollisions(float dt)
 
 			// Sphere Check (保守的判定)
 			XMVECTOR posB = XMLoadFloat3(&m_bodies[idxB].position);
-			float rSum = m_radii[idxA] + m_radii[idxB];
+			float rSum = radii[static_cast<size_t>(idxA)] + radii[static_cast<size_t>(idxB)];
 			XMVECTOR dp = XMVectorSubtract(posB, posA);
 			if (XMVectorGetX(XMVector3LengthSq(dp)) > rSum * rSum) continue;
 
@@ -1740,7 +1760,7 @@ void MmdPhysicsWorld::SolveGround(float dt, const PmxModel& model)
 	// [最適化] 剛体ごとの地面判定は独立しているため並列化
 	const int n = static_cast<int>(m_bodies.size());
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if(n >= 64)
+#pragma omp parallel for schedule(static) if(n >= 512)
 #endif
 	for (int i = 0; i < n; ++i)
 	{
@@ -1789,7 +1809,7 @@ void MmdPhysicsWorld::EndSubStep(float dt, const PmxModel& model)
 	// [最適化] 速度更新ループの並列化
 	const int n = static_cast<int>(m_bodies.size());
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if(n >= 64)
+#pragma omp parallel for schedule(static) if(n >= 512)
 #endif
 	for (int i = 0; i < n; ++i)
 	{

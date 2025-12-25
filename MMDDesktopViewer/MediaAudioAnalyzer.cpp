@@ -22,6 +22,7 @@
 #include <format>
 #include <cstdint>
 #include <cstring>
+#include <span>
 
 #pragma comment(lib, "Mmdevapi.lib")
 #pragma comment(lib, "mincore.lib")
@@ -126,6 +127,109 @@ namespace
 	{
 		return std::clamp(v, 0.0f, 1.0f);
 	}
+
+	int ResolveValidBits(const WAVEFORMATEX* format)
+	{
+		int validBits = (format && format->wBitsPerSample > 0) ? format->wBitsPerSample : 32;
+		if (format && format->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+		{
+			WORD vb = 0;
+			DWORD mask = 0;
+			GUID sub{};
+			if (TryGetExtensibleFields(format, vb, mask, sub) && vb > 0 && vb <= 32)
+			{
+				validBits = vb;
+			}
+		}
+		return validBits;
+	}
+
+	bool DetectLeftAligned(const int32_t* data, size_t sampleCount, int validBits)
+	{
+		if (validBits >= 32 || !data || sampleCount == 0) return true;
+		const int checkN = static_cast<int>(std::min<size_t>(64, sampleCount));
+		uint32_t lowMask = (1u << (32 - validBits)) - 1u;
+		int nonZeroLow = 0;
+		for (int i = 0; i < checkN; ++i)
+		{
+			if ((static_cast<uint32_t>(data[i]) & lowMask) != 0) nonZeroLow++;
+		}
+		return (nonZeroLow == 0);
+	}
+
+	struct AudioFormatConverter
+	{
+		static void FillSilence(std::span<float> out)
+		{
+			std::fill(out.begin(), out.end(), 0.0f);
+		}
+
+		static void CopyFloat(const float* in, size_t samples, std::span<float> out)
+		{
+			if (!in || samples == 0 || out.empty()) return;
+			std::copy_n(in, std::min(samples, out.size()), out.begin());
+		}
+
+		static void ConvertUnsigned8(const uint8_t* in, size_t samples, std::span<float> out)
+		{
+			if (!in || samples == 0 || out.empty()) return;
+			for (size_t i = 0; i < std::min(samples, out.size()); ++i)
+			{
+				out[i] = (static_cast<float>(in[i]) - 128.0f) / 128.0f;
+			}
+		}
+
+		template <class SampleT>
+		static void ConvertSigned(const SampleT* in, size_t samples, float scale, std::span<float> out)
+		{
+			if (!in || samples == 0 || out.empty()) return;
+			const size_t count = std::min(samples, out.size());
+			for (size_t i = 0; i < count; ++i)
+			{
+				out[i] = static_cast<float>(static_cast<double>(in[i]) * static_cast<double>(scale));
+			}
+		}
+
+		static void ConvertPcm24(const uint8_t* in, size_t samples, std::span<float> out)
+		{
+			if (!in || samples == 0 || out.empty()) return;
+			const size_t count = std::min(samples, out.size());
+			for (size_t i = 0; i < count; ++i)
+			{
+				const uint32_t b0 = in[i * 3 + 0];
+				const uint32_t b1 = in[i * 3 + 1];
+				const uint32_t b2 = in[i * 3 + 2];
+				int32_t s = static_cast<int32_t>(b0 | (b1 << 8) | (b2 << 16));
+				s = (s << 8) >> 8;
+				out[i] = static_cast<float>(static_cast<double>(s) / 8388608.0);
+			}
+		}
+
+		static void ConvertPcm32(const int32_t* in, size_t samples, int validBits, bool leftAligned, std::span<float> out)
+		{
+			if (!in || samples == 0 || out.empty()) return;
+			const size_t count = std::min(samples, out.size());
+
+			if (leftAligned || validBits >= 32)
+			{
+				const double denom = 2147483648.0;
+				for (size_t i = 0; i < count; ++i)
+				{
+					out[i] = static_cast<float>(static_cast<double>(in[i]) / denom);
+				}
+				return;
+			}
+
+			const int shift = std::max(0, 32 - validBits);
+			const double denom = static_cast<double>(1ULL << (std::max(validBits, 1) - 1));
+			for (size_t i = 0; i < count; ++i)
+			{
+				int32_t s = in[i];
+				s = (s << shift) >> shift;
+				out[i] = static_cast<float>(static_cast<double>(s) / denom);
+			}
+		}
+	};
 }
 
 struct MediaAudioAnalyzer::GsmtcCache
@@ -712,6 +816,10 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 		{
 			return false;
 		}
+		if (stopToken.stop_requested())
+		{
+			return false;
+		}
 	}
 	else
 	{
@@ -735,6 +843,8 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 	bool anyPacket = false;
 	bool anyNonSilent = false;
 	float maxAbs = 0.0f;
+	bool needRestart = false;
+	std::vector<float> floatBuffer;
 
 	while (packetLength > 0 && !stopToken.stop_requested())
 	{
@@ -746,22 +856,28 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 		if (FAILED(hr))
 		{
 			DebugHr(L"IAudioCaptureClient::GetBuffer", hr);
+			if (hr == AUDCLNT_E_DEVICE_INVALIDATED || hr == AUDCLNT_E_RESOURCES_INVALIDATED || hr == AUDCLNT_E_SERVICE_NOT_RUNNING)
+			{
+				StopCapture();
+				needRestart = true;
+			}
 			break;
 		}
 
 		anyPacket = true;
 
-		std::vector<float> floatBuffer;
-		floatBuffer.resize(static_cast<size_t>(frames) * static_cast<size_t>(channels));
+		const size_t sampleCount = static_cast<size_t>(frames) * static_cast<size_t>(channels);
+		floatBuffer.resize(sampleCount);
+		auto floatSpan = std::span<float>(floatBuffer.data(), floatBuffer.size());
 
 		if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
 		{
-			std::fill(floatBuffer.begin(), floatBuffer.end(), 0.0f);
+			AudioFormatConverter::FillSilence(floatSpan);
 		}
 		else if (isFloat)
 		{
 			const float* in = reinterpret_cast<const float*>(data);
-			std::copy(in, in + floatBuffer.size(), floatBuffer.begin());
+			AudioFormatConverter::CopyFloat(in, sampleCount, floatSpan);
 		}
 		else if (isPcm)
 		{
@@ -770,83 +886,25 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 			if (bits == 8)
 			{
 				const uint8_t* in = reinterpret_cast<const uint8_t*>(data);
-				for (size_t i = 0; i < floatBuffer.size(); ++i)
-				{
-					floatBuffer[i] = (static_cast<float>(in[i]) - 128.0f) / 128.0f;
-				}
+				AudioFormatConverter::ConvertUnsigned8(in, sampleCount, floatSpan);
 			}
 			else if (bits == 16)
 			{
 				const int16_t* in = reinterpret_cast<const int16_t*>(data);
-				for (size_t i = 0; i < floatBuffer.size(); ++i)
-				{
-					floatBuffer[i] = static_cast<float>(in[i]) / 32768.0f;
-				}
+				AudioFormatConverter::ConvertSigned(in, sampleCount, 1.0f / 32768.0f, floatSpan);
 			}
 			else if (bits == 24)
 			{
 				const uint8_t* in = reinterpret_cast<const uint8_t*>(data);
-				for (size_t i = 0; i < floatBuffer.size(); ++i)
-				{
-					const uint32_t b0 = in[i * 3 + 0];
-					const uint32_t b1 = in[i * 3 + 1];
-					const uint32_t b2 = in[i * 3 + 2];
-					int32_t s = static_cast<int32_t>(b0 | (b1 << 8) | (b2 << 16));
-					s = (s << 8) >> 8;
-					floatBuffer[i] = static_cast<float>(static_cast<double>(s) / 8388608.0);
-				}
+				AudioFormatConverter::ConvertPcm24(in, sampleCount, floatSpan);
 			}
 			else if (bits == 32)
 			{
 				const int32_t* in = reinterpret_cast<const int32_t*>(data);
 
-				// validBits を見て「左詰め/右詰め」を自動判定して正規化する（環境差対策）。
-				int validBits = 32;
-				if (m_mixFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
-				{
-					WORD vb = 0;
-					DWORD mask = 0;
-					GUID sub{};
-					if (TryGetExtensibleFields(m_mixFormat, vb, mask, sub))
-					{
-						if (vb > 0 && vb <= 32)
-						{
-							validBits = static_cast<int>(vb);
-						}
-					}
-				}
-				// 先頭少数サンプルで「下位ビットがゼロか」を見て左詰め判定
-				bool looksLeftAligned = (validBits < 32);
-				if (validBits < 32)
-				{
-					const int checkN = static_cast<int>(std::min<size_t>(64, floatBuffer.size()));
-					uint32_t lowMask = (1u << (32 - validBits)) - 1u;
-					int nonZeroLow = 0;
-					for (int i = 0; i < checkN; ++i)
-					{
-						if ((static_cast<uint32_t>(in[i]) & lowMask) != 0) nonZeroLow++;
-					}
-					looksLeftAligned = (nonZeroLow == 0);
-				}
-
-				if (looksLeftAligned)
-				{
-					for (size_t i = 0; i < floatBuffer.size(); ++i)
-					{
-						floatBuffer[i] = static_cast<float>(static_cast<double>(in[i]) / 2147483648.0);
-					}
-				}
-				else
-				{
-					const int shift = 32 - validBits;
-					const double denom = static_cast<double>(1ULL << (validBits - 1));
-					for (size_t i = 0; i < floatBuffer.size(); ++i)
-					{
-						int32_t s = in[i];
-						s = (s << shift) >> shift;
-						floatBuffer[i] = static_cast<float>(static_cast<double>(s) / denom);
-					}
-				}
+				const int validBits = ResolveValidBits(m_mixFormat);
+				const bool looksLeftAligned = DetectLeftAligned(in, sampleCount, validBits);
+				AudioFormatConverter::ConvertPcm32(in, sampleCount, validBits, looksLeftAligned, floatSpan);
 			}
 			else
 			{
@@ -855,7 +913,7 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 				{
 					OutputDebugStringW(std::format(L"[Audio] Unsupported PCM bits={} -> treated as silence\r\n", bits).c_str());
 				}
-				std::fill(floatBuffer.begin(), floatBuffer.end(), 0.0f);
+				AudioFormatConverter::FillSilence(floatSpan);
 			}
 		}
 		else
@@ -865,15 +923,15 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 			{
 				OutputDebugStringW(std::format(L"[Audio] Unsupported format tag={} bits={} (not float/pcm) -> treated as silence\r\n", m_mixFormat->wFormatTag, m_mixFormat->wBitsPerSample).c_str());
 			}
-			std::fill(floatBuffer.begin(), floatBuffer.end(), 0.0f);
+			AudioFormatConverter::FillSilence(floatSpan);
 		}
 
 		// 取り込めているかの統計（1秒に1回だけログ用のピーク）
 		{
-			const size_t checkN = std::min<size_t>(floatBuffer.size(), 4096);
+			const size_t checkN = std::min<size_t>(floatSpan.size(), 4096);
 			for (size_t i = 0; i < checkN; ++i)
 			{
-				float a = std::abs(floatBuffer[i]);
+				float a = std::abs(floatSpan[i]);
 				if (a > maxAbs) maxAbs = a;
 			}
 		}
@@ -892,12 +950,23 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 			m_state.active = true;
 		}
 
+		if (stopToken.stop_requested())
+		{
+			m_captureClient->ReleaseBuffer(frames);
+			break;
+		}
+
 		m_captureClient->ReleaseBuffer(frames);
 
 		hr = m_captureClient->GetNextPacketSize(&packetLength);
 		if (FAILED(hr))
 		{
 			DebugHr(L"IAudioCaptureClient::GetNextPacketSize(loop)", hr);
+			if (hr == AUDCLNT_E_DEVICE_INVALIDATED || hr == AUDCLNT_E_RESOURCES_INVALIDATED || hr == AUDCLNT_E_SERVICE_NOT_RUNNING)
+			{
+				StopCapture();
+				needRestart = true;
+			}
 			break;
 		}
 	}
@@ -929,8 +998,12 @@ bool MediaAudioAnalyzer::CaptureAudioOnce(std::stop_token stopToken)
 		}
 	}
 
+	if (needRestart)
+	{
+		return false;
+	}
 	// データが来ていないだけなら「成功」とする
-	return true;
+	return !stopToken.stop_requested();
 }
 
 void MediaAudioAnalyzer::AudioAnalyzer::Reset(double sampleRate, int channels)
