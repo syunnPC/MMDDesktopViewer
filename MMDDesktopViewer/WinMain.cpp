@@ -1,4 +1,5 @@
 ﻿#include "App.hpp"
+#include "StringUtil.hpp"
 #include <string>
 #include <algorithm>
 #include <format>
@@ -8,24 +9,6 @@
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 static HANDLE g_cpuJob = nullptr;
-
-static std::wstring Utf8ToW(const char* s)
-{
-	if (!s) return L"";
-	int len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, nullptr, 0);
-	if (len <= 0)
-	{
-		// fallback
-		len = MultiByteToWideChar(CP_ACP, 0, s, -1, nullptr, 0);
-		if (len <= 0) return L"";
-		std::wstring out(len - 1, L'\0');
-		MultiByteToWideChar(CP_ACP, 0, s, -1, out.data(), len);
-		return out;
-	}
-	std::wstring out(len - 1, L'\0');
-	MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, out.data(), len);
-	return out;
-}
 
 static void SetProcessEcoQoS(bool enable)
 {
@@ -164,7 +147,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ PWSTR, _I
 	catch (const std::exception& e)
 	{
 		std::wstring msg = L"Fatal error:\n";
-		msg += Utf8ToW(e.what());
+		msg += StringUtil::Utf8ToWideAllowAcpFallback(e.what());
 		MessageBoxW(nullptr, msg.c_str(), L"MMDDesk", MB_ICONERROR);
 		OutputDebugStringW(msg.c_str());
 		return -1;

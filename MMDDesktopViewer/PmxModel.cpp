@@ -5,22 +5,13 @@
 #include "PmxModel.hpp"
 #include "PmxLoader.hpp"
 #include "BinaryReader.hpp"
+#include "StringUtil.hpp"
 #include <windows.h>
 #include <stdexcept>
 #include <algorithm>
 
 namespace
 {
-	std::wstring Utf8ToW(const std::string& s)
-	{
-		if (s.empty()) return {};
-		int len = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
-		if (len <= 0) throw std::runtime_error("Utf8ToW failed.");
-		std::wstring out(len, L'\0');
-		MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), out.data(), len);
-		return out;
-	}
-
 	std::wstring U16ToW(const std::u16string& s)
 	{
 		return std::wstring(reinterpret_cast<const wchar_t*>(s.data()), s.size());
@@ -37,7 +28,7 @@ std::wstring PmxModel::ReadPmxText(BinaryReader& br) const
 	else if (m_header.encoding == 1)
 	{
 		auto u8 = br.ReadStringUtf8WithLength();
-		return Utf8ToW(u8);
+		return StringUtil::Utf8ToWide(u8);
 	}
 	throw std::runtime_error("Unknown PMX encoding.");
 }

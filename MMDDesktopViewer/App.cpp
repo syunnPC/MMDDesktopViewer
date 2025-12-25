@@ -8,6 +8,7 @@
 #include "Settings.hpp"
 #include "ProgressWindow.hpp"
 #include "MediaAudioAnalyzer.hpp"
+#include "StringUtil.hpp"
 #include <algorithm>
 #include <format>
 #include <thread>
@@ -333,23 +334,6 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 
 		auto result = std::make_unique<ModelLoadResult>();
 
-		auto toWide = [](std::string_view src) -> std::wstring
-			{
-				if (src.empty()) return {};
-				UINT cp = CP_UTF8;
-				int len = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, src.data(), static_cast<int>(src.size()), nullptr, 0);
-				if (len <= 0)
-				{
-					cp = CP_ACP;
-					len = MultiByteToWideChar(cp, 0, src.data(), static_cast<int>(src.size()), nullptr, 0);
-				}
-				if (len <= 0) return {};
-				std::wstring out(static_cast<size_t>(len), L'\0');
-				DWORD flags = (cp == CP_UTF8) ? MB_ERR_INVALID_CHARS : 0;
-				MultiByteToWideChar(cp, flags, src.data(), static_cast<int>(src.size()), out.data(), len);
-				return out;
-			};
-
 		try
 		{
 			auto newModel = std::make_unique<PmxModel>();
@@ -376,7 +360,7 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 							m_progress->SetMessage(msg);
 							m_progress->SetProgress(p);
 						}
-													 }, 0.6f, 1.0f);
+					 }, 0.6f, 1.0f);
 				}
 
 				// 所有権を移動するためにrelease()する
@@ -387,7 +371,7 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 		{
 			auto buf = std::format("Model Load Error: {}\n", e.what());
 			OutputDebugStringA(buf.c_str());
-			result->errorMessage = toWide(e.what());
+			result->errorMessage = StringUtil::Utf8ToWideAllowAcpFallback(e.what());
 		}
 		catch (...)
 		{
@@ -419,7 +403,7 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 			CoUninitialize();
 		}
 
-								});
+	});
 }
 
 void App::CancelLoadingThread()

@@ -213,6 +213,8 @@
     <ClCompile Include="RenderPipelineManager.cpp" />
     <ClCompile Include="Settings.cpp" />
     <ClCompile Include="SettingsWindow.cpp" />
+    <ClInclude Include="StringUtil.hpp" />
+    <ClCompile Include="StringUtil.cpp" />
     <ClCompile Include="TrayIcon.cpp" />
     <ClCompile Include="TrayMenuWindow.cpp" />
     <ClCompile Include="VmdMotion.cpp" />
