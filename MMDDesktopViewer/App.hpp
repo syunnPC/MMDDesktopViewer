@@ -2,8 +2,11 @@
 #include <windows.h>
 #include <memory>
 #include <filesystem>
+#include <string>
 #include <vector>
 #include <atomic>
+#include <thread>
+#include <chrono>
 #include "ProgressWindow.hpp"
 #include "TrayIcon.hpp"
 #include "DcompRenderer.hpp"
@@ -11,8 +14,13 @@
 #include "Settings.hpp"
 #include "inputManager.hpp"
 #include "WindowManager.hpp"
+#include "AudioReactiveState.hpp"
+#include "TrayMenuWindow.hpp"
+
+constexpr UINT kDefaultTimerMs = 16;
 
 class SettingsWindow;
+class MediaAudioAnalyzer;
 
 class App
 {
@@ -71,17 +79,23 @@ private:
 	void UpdateTimerInterval();
 	UINT ComputeTimerIntervalMs() const;
 	void LoadModelFromSettings();
+	void ShowNotification(const std::wstring& title, const std::wstring& message) const;
 
 	void OnTrayCommand(UINT id);
+	void ShowTrayMenu(const POINT& anchor);
 	void OnTimer();
+	void Update();
+	void Render();
 
 	HINSTANCE m_hInst{};
 
 	std::unique_ptr<TrayIcon> m_tray;
+	std::unique_ptr<TrayMenuWindow> m_trayMenu;
 	std::unique_ptr<SettingsWindow> m_settings;
 
 	std::unique_ptr<DcompRenderer> m_renderer;
 	std::unique_ptr<MmdAnimator> m_animator;
+	std::unique_ptr<MediaAudioAnalyzer> m_mediaAudio;
 
 	InputManager m_input;
 	WindowManager m_windowManager;
@@ -94,7 +108,8 @@ private:
 
 	std::vector<std::filesystem::path> m_motionFiles;
 
-	HMENU m_trayMenu{};
+	ULONG_PTR m_gdiplusToken{};
+	bool m_gdiplusInitialized{ false };
 
 	bool m_comInitialized{ false };
 
@@ -103,9 +118,14 @@ private:
 	// ローディング関連
 	std::unique_ptr<ProgressWindow> m_progress;
 	std::atomic<bool> m_isLoading{ false };
+	std::jthread m_loadThread;
 
 	void StartLoadingModel(const std::filesystem::path& path);
 	void OnLoadComplete(WPARAM wParam, LPARAM lParam);
+
+	void CancelLoadingThread();
+
+	std::chrono::milliseconds m_frameInterval{ kDefaultTimerMs };
 
 	bool m_lookAtEnabled{ false };
 };

@@ -163,6 +163,10 @@ struct AppSettings
 	int targetFps{ 60 };
 	bool unlimitedFps{ false };
 
+	// 追加: タスクトレイメニューのテーマ (TrayMenuThemeId の整数値)
+	// 0: DarkDefault / 1: Light / 2: Midnight / 3: Sakura / 4: SolarizedDark / 5: HighContrast
+	int trayMenuThemeId{ 0 };
+
 	// 追加: ウィンドウサイズ
 	int windowWidth{ 0 };
 	int windowHeight{ 0 };
@@ -170,6 +174,8 @@ struct AppSettings
 	// プリセット関連設定
 	PresetMode globalPresetMode{ PresetMode::Ask };
 	std::map<std::wstring, PresetMode> perModelPresetSettings;
+
+	bool mediaReactiveEnabled{ true };
 
 	LightSettings light;
 	PhysicsSettings physics;

@@ -7,16 +7,44 @@
 #include "SettingsWindow.hpp"
 #include "Settings.hpp"
 #include "ProgressWindow.hpp"
+#include "MediaAudioAnalyzer.hpp"
+#include "StringUtil.hpp"
 #include <algorithm>
 #include <format>
 #include <thread>
 #include <stdexcept>
 #include <string>
 #include <cmath>
+#include <shellapi.h>
+#include <ShObjIdl_core.h>
+#include <commctrl.h>
+#include <uxtheme.h>
+#include <gdiplus.h>
+#pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "uxtheme.lib")
 
 namespace
 {
-	constexpr UINT kDefaultTimerMs = 16;
+	struct ModelLoadResult
+	{
+		std::unique_ptr<PmxModel> model;
+		std::wstring errorMessage;
+	};
+
+	static TrayMenuThemeId ClampTrayMenuThemeId(int v)
+	{
+		// Persisted values: 0..5 (Custom is not persisted)
+		switch (v)
+		{
+			case 0: return TrayMenuThemeId::DarkDefault;
+			case 1: return TrayMenuThemeId::Light;
+			case 2: return TrayMenuThemeId::Midnight;
+			case 3: return TrayMenuThemeId::Sakura;
+			case 4: return TrayMenuThemeId::SolarizedDark;
+			case 5: return TrayMenuThemeId::HighContrast;
+			default: return TrayMenuThemeId::DarkDefault;
+		}
+	}
 
 	enum TrayCmd : UINT
 	{
@@ -30,6 +58,14 @@ namespace
 		CMD_TOGGLE_LOOKAT = 106,
 		CMD_TOGGLE_AUTOBLINK = 107,
 		CMD_TOGGLE_BREATH = 108,
+		CMD_TOGGLE_MEDIA_REACTIVE = 109,
+
+		CMD_THEME_DARK = 200,
+		CMD_THEME_LIGHT = 201,
+		CMD_THEME_MIDNIGHT = 202,
+		CMD_THEME_SAKURA = 203,
+		CMD_THEME_SOLARIZED = 204,
+		CMD_THEME_HIGHCONTRAST = 205,
 		CMD_MOTION_BASE = 1000
 	};
 }
@@ -42,25 +78,24 @@ App::App(HINSTANCE hInst)
 		m_input,
 		m_settingsData,
 		WindowManager::Callbacks{
+			[this](const POINT& pt) { ShowTrayMenu(pt); },
 			[this](UINT id) { OnTrayCommand(id); },
 			[this]() { OnTimer(); },
 			[this](WPARAM wParam, LPARAM lParam) { OnLoadComplete(wParam, lParam); },
 			[this]() { SaveSettings(); }
 		})
 {
-	HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-	if (SUCCEEDED(hr))
+	Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+	if (Gdiplus::GdiplusStartup(&m_gdiplusToken, &gdiplusStartupInput, nullptr) == Gdiplus::Ok)
 	{
-		m_comInitialized = true;
-	}
-	else if (hr == RPC_E_CHANGED_MODE)
-	{
-		m_comInitialized = false;
+		m_gdiplusInitialized = true;
 	}
 	else
 	{
-		throw std::runtime_error("CoInitializeEx failed.");
+		throw std::runtime_error("GdiplusStartup failed.");
 	}
+
+	SetCurrentProcessExplicitAppUserModelID(L"MMDDesk");
 
 	m_baseDir = FileUtil::GetExecutableDir();
 	m_modelsDir = m_baseDir / L"Models";
@@ -87,6 +122,17 @@ App::App(HINSTANCE hInst)
 	InitRenderer();
 	InitAnimator();
 
+	m_mediaAudio = std::make_unique<MediaAudioAnalyzer>();
+	m_mediaAudio->SetEnabled(m_settingsData.mediaReactiveEnabled);
+	m_trayMenu = std::make_unique<TrayMenuWindow>(m_hInst, [this](UINT id) { OnTrayCommand(id); });
+
+	// 起動時に設定ファイルのテーマを適用
+	{
+		const TrayMenuThemeId theme = ClampTrayMenuThemeId(m_settingsData.trayMenuThemeId);
+		m_trayMenu->SetTheme(theme);
+		m_settingsData.trayMenuThemeId = static_cast<int>(theme);
+	}
+
 	BuildTrayMenu();
 	InitTray();
 
@@ -95,26 +141,57 @@ App::App(HINSTANCE hInst)
 
 App::~App()
 {
+	CancelLoadingThread();
 	SaveSettings();
 
-	if (m_trayMenu) DestroyMenu(m_trayMenu);
 	m_input.UnregisterHotkeys(m_windowManager.RenderWindow());
 
-	if (m_comInitialized)
+	if (m_gdiplusInitialized)
 	{
-		CoUninitialize();
+		Gdiplus::GdiplusShutdown(m_gdiplusToken);
 	}
 }
 
 int App::Run()
 {
+	using clock = std::chrono::steady_clock;
 	MSG msg{};
-	while (GetMessageW(&msg, nullptr, 0, 0))
+	auto nextTick = clock::now();
+	m_frameInterval = std::chrono::milliseconds(m_timerIntervalMs);
+
+	while (true)
 	{
-		TranslateMessage(&msg);
-		DispatchMessageW(&msg);
+		while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+		{
+			if (msg.message == WM_QUIT)
+			{
+				return static_cast<int>(msg.wParam);
+			}
+			TranslateMessage(&msg);
+			DispatchMessageW(&msg);
+		}
+
+		const auto now = clock::now();
+		if (now >= nextTick)
+		{
+			OnTimer();
+			// Allow dynamic FPS changes without restarting the loop.
+			m_frameInterval = std::chrono::milliseconds(m_timerIntervalMs);
+			nextTick = now + m_frameInterval;
+			continue;
+		}
+
+		const auto sleepFor = nextTick - now;
+		if (sleepFor > std::chrono::milliseconds(1))
+		{
+			// Sleep a little less than the remaining budget to reduce overshoot.
+			std::this_thread::sleep_for(sleepFor - std::chrono::milliseconds(1));
+		}
+		else
+		{
+			std::this_thread::yield();
+		}
 	}
-	return static_cast<int>(msg.wParam);
 }
 
 void App::LoadModelFromSettings()
@@ -240,8 +317,6 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 		}
 	}
 
-	m_isLoading = true;
-
 	if (!m_progress)
 	{
 		m_progress = std::make_unique<ProgressWindow>(m_hInst, m_windowManager.RenderWindow());
@@ -250,18 +325,22 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 	m_progress->SetMessage(L"読み込み開始...");
 	m_progress->SetProgress(0.0f);
 
+	CancelLoadingThread();
+	m_isLoading = true;
+
 	// ワーカースレッド起動
-	std::thread([this, path]() {
+	m_loadThread = std::jthread([this, path](std::stop_token stopToken) {
 		HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-		PmxModel* loadedModelPtr = nullptr;
+		auto result = std::make_unique<ModelLoadResult>();
 
 		try
 		{
 			auto newModel = std::make_unique<PmxModel>();
 
 			// 1. PMXファイル解析
-			bool res = newModel->Load(path, [this](float p, const wchar_t* msg) {
+			bool res = newModel->Load(path, [this, &stopToken](float p, const wchar_t* msg) {
+				if (stopToken.stop_requested()) return;
 				if (m_progress)
 				{
 					m_progress->SetMessage(msg);
@@ -269,48 +348,83 @@ void App::StartLoadingModel(const std::filesystem::path& path)
 				}
 									  });
 
-			if (res)
+			if (res && !stopToken.stop_requested())
 			{
 				// 2. テクスチャの先行読み込み
 				if (m_renderer)
 				{
-					m_renderer->LoadTexturesForModel(newModel.get(), [this](float p, const wchar_t* msg) {
+					m_renderer->LoadTexturesForModel(newModel.get(), [this, &stopToken](float p, const wchar_t* msg) {
+						if (stopToken.stop_requested()) return;
 						if (m_progress)
 						{
 							m_progress->SetMessage(msg);
 							m_progress->SetProgress(p);
 						}
-													 }, 0.6f, 1.0f);
+					 }, 0.6f, 1.0f);
 				}
 
 				// 所有権を移動するためにrelease()する
-				loadedModelPtr = newModel.release();
+				result->model = std::move(newModel);
 			}
 		}
 		catch (const std::exception& e)
 		{
 			auto buf = std::format("Model Load Error: {}\n", e.what());
 			OutputDebugStringA(buf.c_str());
-			loadedModelPtr = nullptr; // 失敗扱い
+			result->errorMessage = StringUtil::Utf8ToWideAllowAcpFallback(e.what());
 		}
 		catch (...)
 		{
 			OutputDebugStringA("Model Load Error: Unknown exception\n");
-			loadedModelPtr = nullptr;
+			result->errorMessage = L"モデルの読み込み中に不明な例外が発生しました。";
 		}
 
 		// 完了通知 (成功時はポインタ、失敗時はnullptr)
-		PostMessage(m_windowManager.MessageWindow(), WindowManager::kLoadCompleteMessage, 0, reinterpret_cast<LPARAM>(loadedModelPtr));
+		if (stopToken.stop_requested())
+		{
+			if (SUCCEEDED(hr))
+			{
+				CoUninitialize();
+			}
+			return;
+		}
+
+		if (HWND msgWnd = m_windowManager.MessageWindow())
+		{
+			ModelLoadResult* rawResult = result.get();
+			if (PostMessage(msgWnd, WindowManager::kLoadCompleteMessage, 0, reinterpret_cast<LPARAM>(rawResult)))
+			{
+				result.release();
+			}
+		}
 
 		if (SUCCEEDED(hr))
 		{
 			CoUninitialize();
 		}
 
-				}).detach();
+	});
+}
+
+void App::CancelLoadingThread()
+{
+	if (m_loadThread.joinable())
+	{
+		m_loadThread.request_stop();
+		m_loadThread.join();
+	}
+	m_isLoading = false;
 }
 
 void App::OnTimer()
+{
+	if (m_isLoading) return;
+
+	Update();
+	Render();
+}
+
+void App::Update()
 {
 	if (m_isLoading) return;
 
@@ -391,8 +505,36 @@ void App::OnTimer()
 
 	if (m_animator)
 	{
+		if (m_mediaAudio)
+		{
+			const auto st = m_mediaAudio->GetState();
+			if (m_mediaAudio->ConsumeDrmWarning())
+			{
+				ShowNotification(L"音声を取得できません", L"DRM保護されたアプリからは音声を取得できません。別のアプリや再生方法をご利用ください。");
+			}
+
+#if _DEBUG
+
+			static auto last = std::chrono::steady_clock::now();
+			const auto now = std::chrono::steady_clock::now();
+			if (now - last > std::chrono::seconds(1))
+			{
+				last = now;
+				OutputDebugStringW(std::format(
+					L"[Audio] active={} bpm={:.1f} beat={:.3f} mouth={:.3f}\r\n",
+					st.active ? 1 : 0, st.bpm, st.beatStrength, st.mouthOpen).c_str());
+			}
+#endif
+
+			m_animator->SetAudioReactiveState(st);
+		}
 		m_animator->Update();
 	}
+}
+
+void App::Render()
+{
+	if (m_isLoading) return;
 
 	if (m_renderer && m_animator)
 	{
@@ -477,6 +619,18 @@ void App::RenderGizmo()
 	m_windowManager.RenderGizmo();
 }
 
+void App::ShowNotification(const std::wstring& title, const std::wstring& message) const
+{
+	if (m_tray)
+	{
+		m_tray->ShowBalloon(title.c_str(), message.c_str(), NIIF_WARNING);
+		return;
+	}
+
+	HWND owner = m_windowManager.RenderWindow();
+	MessageBoxW(owner ? owner : nullptr, message.c_str(), title.c_str(), MB_ICONWARNING | MB_OK);
+}
+
 void App::InitRenderer()
 {
 	if (!m_progress)
@@ -516,6 +670,7 @@ void App::InitAnimator()
 {
 	m_animator = std::make_unique<MmdAnimator>();
 	m_animator->SetPhysicsSettings(m_settingsData.physics);
+	m_animator->SetAudioReactiveEnabled(m_settingsData.mediaReactiveEnabled);
 	LoadModelFromSettings();
 }
 
@@ -523,73 +678,175 @@ void App::InitTray()
 {
 	m_tray = std::make_unique<TrayIcon>(m_windowManager.MessageWindow(), 1);
 	m_tray->Show(L"MMDDesk");
-	m_tray->SetContextMenu(m_trayMenu);
-	m_windowManager.SetTray(m_tray.get(), m_trayMenu);
+	m_windowManager.SetTray(m_tray.get());
 }
 
 void App::BuildTrayMenu()
 {
-	if (m_trayMenu)
-	{
-		DestroyMenu(m_trayMenu);
-	}
-	m_trayMenu = CreatePopupMenu();
-
-	AppendMenuW(m_trayMenu, MF_STRING, CMD_OPEN_SETTINGS, L"設定...");
-
-	UINT manipFlags = MF_STRING;
-	manipFlags |= m_windowManager.IsWindowManipulationMode() ? MF_CHECKED : MF_UNCHECKED;
-	AppendMenuW(m_trayMenu, manipFlags, CMD_TOGGLE_WINDOW_MANIP, L"ウィンドウ操作モード (Ctrl+Alt+R)");
-
-	AppendMenuW(m_trayMenu, MF_SEPARATOR, 0, nullptr);
+	if (!m_trayMenu) return;
 
 	RefreshMotionList();
 
-	HMENU motionMenu = CreatePopupMenu();
-
-	std::wstring pauseText = (m_animator && m_animator->IsPaused()) ? L"再開" : L"一時停止";
-	AppendMenuW(motionMenu, MF_STRING, CMD_TOGGLE_PAUSE, pauseText.c_str());
-
-	std::wstring physText = (m_animator && m_animator->PhysicsEnabled()) ? L"物理: ON" : L"物理: OFF";
-	AppendMenuW(motionMenu, MF_STRING, CMD_TOGGLE_PHYSICS, physText.c_str());
-
-	// LookAt メニュー
-	UINT lookAtFlags = MF_STRING;
-	lookAtFlags |= m_lookAtEnabled ? MF_CHECKED : MF_UNCHECKED;
-	AppendMenuW(motionMenu, lookAtFlags, CMD_TOGGLE_LOOKAT, L"視線追従");
-
-	// 自動まばたきメニュー
-	UINT blinkFlags = MF_STRING;
-	if (m_animator && m_animator->AutoBlinkEnabled()) blinkFlags |= MF_CHECKED;
-	else blinkFlags |= MF_UNCHECKED;
-	AppendMenuW(motionMenu, blinkFlags, CMD_TOGGLE_AUTOBLINK, L"自動まばたき");
-
-	UINT breathFlags = MF_STRING;
-	if (m_animator && m_animator->BreathingEnabled()) breathFlags |= MF_CHECKED;
-	else breathFlags |= MF_UNCHECKED;
-	AppendMenuW(motionMenu, breathFlags, CMD_TOGGLE_BREATH, L"呼吸モーション (待機時)");
-
-	AppendMenuW(motionMenu, MF_STRING, CMD_STOP_MOTION, L"停止 (リセット)");
-	AppendMenuW(motionMenu, MF_SEPARATOR, 0, nullptr);
-
-	for (size_t i = 0; i < m_motionFiles.size(); ++i)
+	TrayMenuModel model{};
+	model.title = L"MMD Desktop Viewer";
+	if (!m_settingsData.modelPath.empty())
 	{
-		const auto& path = m_motionFiles[i];
-		std::wstring name = path.stem().wstring();
-		AppendMenuW(motionMenu, MF_STRING, CMD_MOTION_BASE + static_cast<UINT>(i), name.c_str());
+		model.subtitle = m_settingsData.modelPath.filename().wstring();
+	}
+	else
+	{
+		model.subtitle = L"モデル未読み込み";
 	}
 
-	AppendMenuW(m_trayMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(motionMenu), L"モーション");
-	AppendMenuW(m_trayMenu, MF_STRING, CMD_RELOAD_MOTIONS, L"モーション一覧を更新");
+	const bool paused = (m_animator && m_animator->IsPaused());
+	const bool physicsEnabled = (m_animator && m_animator->PhysicsEnabled());
+	const bool autoBlink = (m_animator && m_animator->AutoBlinkEnabled());
+	const bool breathing = (m_animator && m_animator->BreathingEnabled());
 
-	AppendMenuW(m_trayMenu, MF_SEPARATOR, 0, nullptr);
-	AppendMenuW(m_trayMenu, MF_STRING, CMD_EXIT, L"終了");
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Action, CMD_OPEN_SETTINGS, L"設定", L"描画・ライティング・プリセットを編集"
+						  });
 
-	if (m_tray)
+	// --- テーマメニュー追加 ---
+	TrayMenuItem themeMenu;
+	themeMenu.title = L"テーマ";
+	themeMenu.kind = TrayMenuItem::Kind::Action;
+
+	TrayMenuThemeId currentTheme = m_trayMenu->GetThemeId();
+	auto addThemeItem = [&](const std::wstring& name, UINT cmdId, TrayMenuThemeId targetTheme) {
+		TrayMenuItem item;
+		item.title = name;
+		item.commandId = cmdId;
+		item.kind = TrayMenuItem::Kind::Action;
+		item.toggled = (currentTheme == targetTheme);
+		themeMenu.children.push_back(item);
+		};
+
+	addThemeItem(L"ダーク (既定)", CMD_THEME_DARK, TrayMenuThemeId::DarkDefault);
+	addThemeItem(L"ライト", CMD_THEME_LIGHT, TrayMenuThemeId::Light);
+	addThemeItem(L"ミッドナイト", CMD_THEME_MIDNIGHT, TrayMenuThemeId::Midnight);
+	addThemeItem(L"桜 (Sakura)", CMD_THEME_SAKURA, TrayMenuThemeId::Sakura);
+	addThemeItem(L"ソーラー", CMD_THEME_SOLARIZED, TrayMenuThemeId::SolarizedDark);
+	addThemeItem(L"ハイコントラスト", CMD_THEME_HIGHCONTRAST, TrayMenuThemeId::HighContrast);
+	model.items.push_back(themeMenu);
+	// -----------------------
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle, CMD_TOGGLE_WINDOW_MANIP, L"ウィンドウ操作モード", L"Ctrl+Alt+R で切り替え", m_windowManager.IsWindowManipulationMode()
+						  });
+
+	model.items.push_back(TrayMenuItem{ TrayMenuItem::Kind::Separator, 0, L"", L"" });
+	model.items.push_back(TrayMenuItem{ TrayMenuItem::Kind::Header, 0, L"再生コントロール", L"" });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle,
+		CMD_TOGGLE_PAUSE,
+		paused ? L"再生を再開" : L"一時停止",
+		L"モーションを一時停止 / 再開",
+		paused
+						  });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle,
+		CMD_TOGGLE_PHYSICS,
+		L"物理シミュレーション",
+		physicsEnabled ? L"有効" : L"無効",
+		physicsEnabled
+						  });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle,
+		CMD_TOGGLE_LOOKAT,
+		L"視線追従",
+		L"視線を注視点へ向けます",
+		m_lookAtEnabled
+						  });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle,
+		CMD_TOGGLE_AUTOBLINK,
+		L"自動まばたき",
+		L"自然なまばたきを付与",
+		autoBlink
+						  });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle,
+		CMD_TOGGLE_BREATH,
+		L"呼吸モーション (待機時)",
+		L"待機中の呼吸モーションを制御",
+		breathing
+						  });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Toggle,
+		CMD_TOGGLE_MEDIA_REACTIVE,
+		L"メディア連動 (SMTC/WASAPI)",
+		L"音楽のビートに合わせて動作",
+		m_settingsData.mediaReactiveEnabled
+						  });
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Action,
+		CMD_STOP_MOTION,
+		L"停止 (リセット)",
+		L"再生を止めてポーズをリセット",
+		false,
+		true
+						  });
+
+	model.items.push_back(TrayMenuItem{ TrayMenuItem::Kind::Separator, 0, L"", L"" });
+	model.items.push_back(TrayMenuItem{ TrayMenuItem::Kind::Header, 0, L"モーション", L"" });
+
+	if (m_motionFiles.empty())
 	{
-		m_tray->SetContextMenu(m_trayMenu);
+		model.items.push_back(TrayMenuItem{
+			TrayMenuItem::Kind::Action,
+			0,
+			L"モーションファイルが見つかりません",
+			L"\"Motions\" フォルダーに .vmd を追加してください"
+							  });
 	}
-	m_windowManager.SetTray(m_tray.get(), m_trayMenu);
+	else
+	{
+		for (size_t i = 0; i < m_motionFiles.size(); ++i)
+		{
+			const auto& path = m_motionFiles[i];
+			std::wstring name = path.stem().wstring();
+			model.items.push_back(TrayMenuItem{
+				TrayMenuItem::Kind::Action,
+				CMD_MOTION_BASE + static_cast<UINT>(i),
+				name,
+				L"クリックして再生を開始"
+								  });
+		}
+	}
+
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Action,
+		CMD_RELOAD_MOTIONS,
+		L"モーション一覧を更新",
+		L"フォルダーを再スキャンします"
+						  });
+
+	model.items.push_back(TrayMenuItem{ TrayMenuItem::Kind::Separator, 0, L"", L"" });
+	model.items.push_back(TrayMenuItem{
+		TrayMenuItem::Kind::Action,
+		CMD_EXIT,
+		L"終了",
+		L"アプリケーションを終了します",
+		false,
+		true
+						  });
+
+	m_trayMenu->SetModel(model);
+}
+
+void App::ShowTrayMenu(const POINT& anchor)
+{
+	if (!m_trayMenu) return;
+	BuildTrayMenu();
+	m_trayMenu->ShowAt(anchor);
 }
 
 void App::RefreshMotionList()
@@ -637,7 +894,7 @@ UINT App::ComputeTimerIntervalMs() const
 void App::UpdateTimerInterval()
 {
 	m_timerIntervalMs = ComputeTimerIntervalMs();
-	m_windowManager.UpdateTimerInterval(m_timerIntervalMs);
+	m_frameInterval = std::chrono::milliseconds(m_timerIntervalMs);
 }
 
 void App::ApplySettings(const AppSettings& settings, bool persist)
@@ -674,6 +931,15 @@ void App::ApplySettings(const AppSettings& settings, bool persist)
 	if (m_animator)
 	{
 		m_animator->SetPhysicsSettings(m_settingsData.physics);
+	}
+
+	if (m_mediaAudio)
+	{
+		m_mediaAudio->SetEnabled(m_settingsData.mediaReactiveEnabled);
+	}
+	if (m_animator)
+	{
+		m_animator->SetAudioReactiveEnabled(m_settingsData.mediaReactiveEnabled);
 	}
 
 	if (persist)
@@ -724,6 +990,13 @@ void App::SaveSettings()
 		m_settingsData.light = m_renderer->GetLightSettings();
 	}
 
+	// 現在のタスクトレイメニューのテーマを保存
+	if (m_trayMenu)
+	{
+		const TrayMenuThemeId theme = ClampTrayMenuThemeId(static_cast<int>(m_trayMenu->GetThemeId()));
+		m_settingsData.trayMenuThemeId = static_cast<int>(theme);
+	}
+
 	SettingsManager::Save(m_baseDir, m_settingsData);
 
 	if (!m_settingsData.modelPath.empty())
@@ -748,6 +1021,11 @@ void App::SaveSettings()
 
 void App::OnTrayCommand(UINT id)
 {
+	if (m_trayMenu)
+	{
+		m_trayMenu->Hide();
+	}
+
 	switch (id)
 	{
 		case CMD_OPEN_SETTINGS:
@@ -813,9 +1091,58 @@ void App::OnTrayCommand(UINT id)
 			}
 			break;
 
+		case CMD_TOGGLE_MEDIA_REACTIVE:
+			m_settingsData.mediaReactiveEnabled = !m_settingsData.mediaReactiveEnabled;
+			if (m_mediaAudio)
+			{
+				m_mediaAudio->SetEnabled(m_settingsData.mediaReactiveEnabled);
+			}
+			if (m_animator)
+			{
+				m_animator->SetAudioReactiveEnabled(m_settingsData.mediaReactiveEnabled);
+			}
+			BuildTrayMenu();
+			break;
+
 		case CMD_TOGGLE_WINDOW_MANIP:
 			m_windowManager.ToggleWindowManipulationMode();
 			BuildTrayMenu();
+			break;
+
+		case CMD_THEME_DARK:
+			m_trayMenu->SetTheme(TrayMenuThemeId::DarkDefault);
+			m_settingsData.trayMenuThemeId = static_cast<int>(TrayMenuThemeId::DarkDefault);
+			SaveSettings();
+			break;
+
+		case CMD_THEME_LIGHT:
+			m_trayMenu->SetTheme(TrayMenuThemeId::Light);
+			m_settingsData.trayMenuThemeId = static_cast<int>(TrayMenuThemeId::Light);
+			SaveSettings();
+			break;
+
+		case CMD_THEME_MIDNIGHT:
+			m_trayMenu->SetTheme(TrayMenuThemeId::Midnight);
+			m_settingsData.trayMenuThemeId = static_cast<int>(TrayMenuThemeId::Midnight);
+			SaveSettings();
+			break;
+
+		case CMD_THEME_SAKURA:
+			m_trayMenu->SetTheme(TrayMenuThemeId::Sakura);
+			m_settingsData.trayMenuThemeId = static_cast<int>(TrayMenuThemeId::Sakura);
+			SaveSettings();
+			break;
+
+		case CMD_THEME_SOLARIZED:
+			m_trayMenu->SetTheme(TrayMenuThemeId::SolarizedDark);
+			m_settingsData.trayMenuThemeId = static_cast<int>(TrayMenuThemeId::SolarizedDark);
+			SaveSettings();
+			break;
+
+		case CMD_THEME_HIGHCONTRAST:
+			m_trayMenu->SetTheme(TrayMenuThemeId::HighContrast);
+			m_settingsData.trayMenuThemeId = static_cast<int>(TrayMenuThemeId::HighContrast);
+			SaveSettings();
 			break;
 
 		case CMD_EXIT:
@@ -845,21 +1172,24 @@ void App::OnTrayCommand(UINT id)
 
 void App::OnLoadComplete(WPARAM, LPARAM lParam)
 {
-	PmxModel* rawPtr = reinterpret_cast<PmxModel*>(lParam);
+	std::unique_ptr<ModelLoadResult> result(reinterpret_cast<ModelLoadResult*>(lParam));
 
-	if (rawPtr)
+	if (result && result->model)
 	{
-		std::unique_ptr<PmxModel> model(rawPtr);
 		// アニメーターにセット
 		if (m_animator)
 		{
-			m_animator->SetModel(std::move(model));
+			m_animator->SetModel(std::move(result->model));
 			m_animator->Update();
 		}
 	}
 	else
 	{
-		MessageBoxW(m_windowManager.RenderWindow(), L"モデルの読み込みに失敗しました。", L"エラー", MB_ICONERROR);
+		const std::wstring message = (result && !result->errorMessage.empty())
+			? result->errorMessage
+			: std::wstring(L"モデルの読み込みに失敗しました。");
+
+		MessageBoxW(m_windowManager.RenderWindow(), message.c_str(), L"エラー", MB_ICONERROR);
 	}
 
 	if (m_progress)

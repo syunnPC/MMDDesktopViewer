@@ -202,15 +202,21 @@
     <ClCompile Include="FileUtil.cpp" />
     <ClCompile Include="GpuResourceManager.cpp" />
     <ClCompile Include="InputManager.cpp" />
+    <ClCompile Include="MediaAudioAnalyzer.cpp" />
     <ClCompile Include="MmdAnimator.cpp" />
     <ClCompile Include="MmdPhysicsWorld.cpp" />
+    <ClCompile Include="PmxLoader.cpp" />
+    <ClInclude Include="PmxLoader.hpp" />
     <ClCompile Include="PmxModel.cpp" />
     <ClCompile Include="PmxModelDrawer.cpp" />
     <ClCompile Include="ProgressWindow.cpp" />
     <ClCompile Include="RenderPipelineManager.cpp" />
     <ClCompile Include="Settings.cpp" />
     <ClCompile Include="SettingsWindow.cpp" />
+    <ClInclude Include="StringUtil.hpp" />
+    <ClCompile Include="StringUtil.cpp" />
     <ClCompile Include="TrayIcon.cpp" />
+    <ClCompile Include="TrayMenuWindow.cpp" />
     <ClCompile Include="VmdMotion.cpp" />
     <ClCompile Include="WicTexture.cpp" />
     <ClCompile Include="WindowManager.cpp" />
@@ -218,6 +224,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="App.hpp" />
+    <ClInclude Include="AudioReactiveState.hpp" />
     <ClInclude Include="BinaryReader.hpp" />
     <ClInclude Include="BoneSolver.hpp" />
     <ClInclude Include="Camera.hpp" />
@@ -229,6 +236,7 @@
     <ClInclude Include="FileUtil.hpp" />
     <ClInclude Include="GpuResourceManager.hpp" />
     <ClInclude Include="InputManager.hpp" />
+    <ClInclude Include="MediaAudioAnalyzer.hpp" />
     <ClInclude Include="MmdAnimator.hpp" />
     <ClInclude Include="MmdPhysicsWorld.hpp" />
     <ClInclude Include="PmxModel.hpp" />
@@ -238,6 +246,7 @@
     <ClInclude Include="Settings.hpp" />
     <ClInclude Include="SettingsWindow.hpp" />
     <ClInclude Include="TrayIcon.hpp" />
+    <ClInclude Include="TrayMenuWindow.hpp" />
     <ClInclude Include="VmdMotion.hpp" />
     <ClInclude Include="WicTexture.hpp" />
     <ClInclude Include="WindowManager.hpp" />

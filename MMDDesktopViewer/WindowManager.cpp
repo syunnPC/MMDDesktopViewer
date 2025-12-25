@@ -97,10 +97,9 @@ void WindowManager::SetRenderer(DcompRenderer* renderer)
 	m_renderer = renderer;
 }
 
-void WindowManager::SetTray(TrayIcon* tray, HMENU menu)
+void WindowManager::SetTray(TrayIcon* tray)
 {
 	m_tray = tray;
-	m_trayMenu = menu;
 }
 
 void WindowManager::ApplyTopmost(bool alwaysOnTop) const
@@ -120,7 +119,8 @@ void WindowManager::ApplyTopmost(bool alwaysOnTop) const
 void WindowManager::UpdateTimerInterval(UINT intervalMs)
 {
 	if (!m_msgWnd) return;
-	SetTimer(m_msgWnd, kTimerId, intervalMs, nullptr);
+	KillTimer(m_msgWnd, kTimerId);
+	(void)intervalMs;
 }
 
 void WindowManager::ToggleGizmoWindow()
@@ -654,13 +654,22 @@ LRESULT WindowManager::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
 {
 	if (m_tray && msg == m_tray->CallbackMessage())
 	{
-		if (LOWORD(lParam) == WM_RBUTTONUP)
+		const UINT evRaw = static_cast<UINT>(lParam);
+		const UINT ev = LOWORD(lParam);
+		auto isEv = [&](UINT x) { return (ev == x) || (evRaw == x); };
+
+		const bool requestMenu =
+			isEv(WM_CONTEXTMENU) ||
+			isEv(WM_RBUTTONUP) ||
+			isEv(WM_RBUTTONDOWN) ||
+			isEv(NIN_SELECT) ||
+			isEv(NIN_KEYSELECT);
+
+		if (requestMenu && m_callbacks.onTrayMenuRequested)
 		{
-			POINT pt;
+			POINT pt{};
 			GetCursorPos(&pt);
-			SetForegroundWindow(hWnd);
-			TrackPopupMenu(m_trayMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, nullptr);
-			PostMessageW(hWnd, WM_NULL, 0, 0);
+			m_callbacks.onTrayMenuRequested(pt);
 		}
 		return 0;
 	}

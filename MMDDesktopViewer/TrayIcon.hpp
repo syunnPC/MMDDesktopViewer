@@ -16,6 +16,7 @@ public:
 	void SetContextMenu(HMENU menu);
 
 	bool HandleMessage(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) const;
+	void ShowBalloon(const wchar_t* title, const wchar_t* message, DWORD infoFlags = NIIF_INFO) const;
 
 	UINT CallbackMessage() const
 	{

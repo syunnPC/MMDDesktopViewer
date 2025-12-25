@@ -16,6 +16,7 @@
 #include <cmath>
 
 #include "PmxModel.hpp"
+#include "PmxLoader.hpp"
 #include "BinaryReader.hpp"
 
 using namespace std;

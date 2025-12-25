@@ -1,13 +1,9 @@
-﻿#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
-
-#include "Settings.hpp"
-
-#include <codecvt>
+﻿#include "Settings.hpp"
+#include "StringUtil.hpp"
 #include <fstream>
-#include <locale>
-#include <system_error>
 #include <sstream>
 #include <cwchar>
+#include <optional>
 
 namespace
 {
@@ -22,9 +18,40 @@ namespace
 		return s.substr(first, last - first + 1);
 	}
 
-	void EnsureUtf8Locale(std::basic_ios<wchar_t>& s)
+	std::optional<std::wstring> ReadUtf8File(const std::filesystem::path& path)
 	{
-		s.imbue(std::locale(std::locale::classic(), new std::codecvt_utf8<wchar_t>()));
+		std::ifstream fin(path, std::ios::binary);
+		if (!fin) return std::nullopt;
+
+		std::ostringstream buffer;
+		buffer << fin.rdbuf();
+		if (!fin && !fin.eof()) return std::nullopt;
+
+		try
+		{
+			return StringUtil::Utf8ToWideAllowAcpFallback(buffer.str());
+		}
+		catch (const std::exception&)
+		{
+			return std::nullopt;
+		}
+	}
+
+	bool WriteUtf8File(const std::filesystem::path& path, const std::wstring& content)
+	{
+		std::ofstream fout(path, std::ios::binary);
+		if (!fout) return false;
+
+		try
+		{
+			auto bytes = StringUtil::WideToUtf8(content);
+			fout.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+			return static_cast<bool>(fout);
+		}
+		catch (const std::exception&)
+		{
+			return false;
+		}
 	}
 
 	std::filesystem::path SettingsPath(const std::filesystem::path& baseDir)
@@ -281,9 +308,10 @@ AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
 	const auto path = SettingsPath(baseDir);
 	if (!std::filesystem::exists(path)) return settings;
 
-	std::wifstream fin(path);
-	EnsureUtf8Locale(fin);
-	if (!fin) return settings;
+	auto content = ReadUtf8File(path);
+	if (!content) return settings;
+
+	std::wstringstream fin(*content);
 
 	std::wstring line;
 	while (std::getline(fin, line))
@@ -310,6 +338,10 @@ AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
 		{
 			settings.unlimitedFps = (value == L"1" || value == L"true" || value == L"True");
 		}
+		else if (key == L"trayMenuTheme" || key == L"trayMenuThemeId")
+		{
+			settings.trayMenuThemeId = ParseInt(value, settings.trayMenuThemeId);
+		}
 		else if (key == L"windowWidth")
 		{
 			settings.windowWidth = ParseInt(value, 0);
@@ -321,6 +353,10 @@ AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
 		else if (key == L"globalPresetMode")
 		{
 			settings.globalPresetMode = static_cast<PresetMode>(ParseInt(value, 0));
+		}
+		else if (key == L"mediaReactiveEnabled")
+		{
+			settings.mediaReactiveEnabled = (value == L"1" || value == L"true" || value == L"True");
 		}
 		else if (key.rfind(L"modelPreset_", 0) == 0)
 		{
@@ -335,6 +371,13 @@ AppSettings SettingsManager::Load(const std::filesystem::path& baseDir,
 			ParseLightSettingLine(key, value, settings.light);
 		}
 	}
+
+	// Clamp tray menu theme id to known presets (0..5). "Custom" is not persisted.
+	if (settings.trayMenuThemeId < 0 || settings.trayMenuThemeId > 5)
+	{
+		settings.trayMenuThemeId = 0;
+	}
+
 	return settings;
 }
 
@@ -350,17 +393,17 @@ void SettingsManager::Save(const std::filesystem::path& baseDir,
 	}
 
 	const auto path = SettingsPath(baseDir);
-	std::wofstream fout(path);
-	EnsureUtf8Locale(fout);
-	if (!fout) return;
+	std::wostringstream fout;
 
 	fout << L"model=" << pathForSave.wstring() << L"\n";
 	fout << L"alwaysOnTop=" << (settings.alwaysOnTop ? L"1" : L"0") << L"\n";
 	fout << L"targetFps=" << IntToWString(settings.targetFps) << L"\n";
 	fout << L"unlimitedFps=" << (settings.unlimitedFps ? L"1" : L"0") << L"\n";
+	fout << L"trayMenuTheme=" << IntToWString(settings.trayMenuThemeId) << L"\n";
 	fout << L"windowWidth=" << IntToWString(settings.windowWidth) << L"\n";
 	fout << L"windowHeight=" << IntToWString(settings.windowHeight) << L"\n";
 	fout << L"globalPresetMode=" << IntToWString(static_cast<int>(settings.globalPresetMode)) << L"\n";
+	fout << L"mediaReactiveEnabled=" << (settings.mediaReactiveEnabled ? L"1" : L"0") << L"\n";
 
 	for (const auto& [name, mode] : settings.perModelPresetSettings)
 	{
@@ -369,6 +412,8 @@ void SettingsManager::Save(const std::filesystem::path& baseDir,
 
 	WriteLightSettings(fout, settings.light);
 	WritePhysicsSettings(fout, settings.physics);
+
+	WriteUtf8File(path, fout.str());
 }
 
 bool SettingsManager::HasPreset(const std::filesystem::path& baseDir, const std::filesystem::path& modelPath)
@@ -385,13 +430,13 @@ void SettingsManager::SavePreset(const std::filesystem::path& baseDir,
 	auto path = GetPresetPath(baseDir, modelPath);
 	if (path.empty()) return;
 
-	std::wofstream fout(path);
-	EnsureUtf8Locale(fout);
-	if (!fout) return;
+	std::wostringstream fout;
 
 	fout << L"; Preset for " << modelPath.filename().wstring() << L"\n";
 	WriteLightSettings(fout, lightSettings);
 	WritePhysicsSettings(fout, physicsSettings);
+
+	WriteUtf8File(path, fout.str());
 }
 
 bool SettingsManager::LoadPreset(const std::filesystem::path& baseDir,
@@ -402,9 +447,10 @@ bool SettingsManager::LoadPreset(const std::filesystem::path& baseDir,
 	auto path = GetPresetPath(baseDir, modelPath);
 	if (path.empty() || !std::filesystem::exists(path)) return false;
 
-	std::wifstream fin(path);
-	EnsureUtf8Locale(fin);
-	if (!fin) return false;
+	auto content = ReadUtf8File(path);
+	if (!content) return false;
+
+	std::wstringstream fin(*content);
 
 	std::wstring line;
 	while (std::getline(fin, line))
