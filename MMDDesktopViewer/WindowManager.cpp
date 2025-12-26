@@ -213,7 +213,7 @@ void WindowManager::EnsureGizmoD2D()
 			D2D1_FEATURE_LEVEL_DEFAULT
 		);
 
-		HRESULT hr = m_d2dFactory->CreateDCRenderTarget(&props, &m_gizmoRt);
+		HRESULT hr = m_d2dFactory->CreateDCRenderTarget(&props, m_gizmoRt.put());
 		if (FAILED(hr))
 		{
 			throw std::runtime_error("CreateDCRenderTarget failed.");
@@ -258,12 +258,12 @@ void WindowManager::RenderGizmo()
 	m_gizmoRt->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
 
 	D2D1_ELLIPSE el = D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius);
-	m_gizmoRt->FillEllipse(el, m_gizmoBrushFill.Get());
-	m_gizmoRt->DrawEllipse(el, m_gizmoBrushStroke.Get(), 2.0f);
+	m_gizmoRt->FillEllipse(el, m_gizmoBrushFill.get());
+	m_gizmoRt->DrawEllipse(el, m_gizmoBrushStroke.get(), 2.0f);
 
 	const float tick = radius * 0.55f;
-	m_gizmoRt->DrawLine(D2D1::Point2F(cx - tick, cy), D2D1::Point2F(cx + tick, cy), m_gizmoBrushStroke.Get(), 1.5f);
-	m_gizmoRt->DrawLine(D2D1::Point2F(cx, cy - tick), D2D1::Point2F(cx, cy + tick), m_gizmoBrushStroke.Get(), 1.5f);
+	m_gizmoRt->DrawLine(D2D1::Point2F(cx - tick, cy), D2D1::Point2F(cx + tick, cy), m_gizmoBrushStroke.get(), 1.5f);
+	m_gizmoRt->DrawLine(D2D1::Point2F(cx, cy - tick), D2D1::Point2F(cx, cy + tick), m_gizmoBrushStroke.get(), 1.5f);
 
 	hr = m_gizmoRt->EndDraw();
 	if (hr == D2DERR_RECREATE_TARGET)

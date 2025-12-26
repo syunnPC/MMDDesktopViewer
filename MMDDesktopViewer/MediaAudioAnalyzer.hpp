@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef WIN32_LEAN_AND_MEAN
+#undef WIN32_LEAN_AND_MEAN
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -8,6 +12,7 @@
 #include <thread>
 #include <vector>
 #include <memory>
+#include <Windows.h>
 #include <mmeapi.h>
 #include <winrt/base.h>
 #include "AudioReactiveState.hpp"

@@ -589,7 +589,7 @@ bool MediaAudioAnalyzer::StartProcessLoopback(uint32_t pid)
 	if (!handler->eventHandle) return false;
 
 	winrt::com_ptr<IActivateAudioInterfaceAsyncOperation> asyncOp;
-	HRESULT hr = ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, __uuidof(IAudioClient), &var, handler.get(), &asyncOp);
+	HRESULT hr = ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, __uuidof(IAudioClient), &var, handler.get(), asyncOp.put());
 	if (FAILED(hr))
 	{
 		DebugHr(L"ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK)", hr);
@@ -690,11 +690,11 @@ bool MediaAudioAnalyzer::StartSystemLoopback()
 	}
 
 	com_ptr<IMMDevice> device;
-	hr = enumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, &device);
+	hr = enumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, device.put());
 	if (FAILED(hr))
 	{
 		DebugHr(L"GetDefaultAudioEndpoint(eMultimedia)", hr);
-		hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
+		hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, device.put());
 		if (FAILED(hr))
 		{
 			DebugHr(L"GetDefaultAudioEndpoint(eConsole)", hr);

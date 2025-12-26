@@ -38,7 +38,7 @@ void Dx12Context::CreateDevice()
 		{
 			if (!rawAdapter) return;
 			Candidate c{};
-			c.adapter = rawAdapter;
+			c.adapter.copy_from(rawAdapter);
 			c.adapter->GetDesc1(&c.desc);
 			if (c.desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) return;
 			candidates.push_back(std::move(c));
