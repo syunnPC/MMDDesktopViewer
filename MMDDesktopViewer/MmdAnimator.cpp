@@ -79,6 +79,18 @@ MmdAnimator::MmdAnimator()
 
 MmdAnimator::~MmdAnimator() = default;
 
+void MmdAnimator::BeginPoseTransitionFromLastPose()
+{
+	if (!m_hasLastPose)
+	{
+		return;
+	}
+
+	m_transitionPose = m_lastPose;
+	m_transitionElapsed = 0.0;
+	m_transitionActive = true;
+	m_hasTransitionPose = true;
+}
 
 bool MmdAnimator::LoadModel(const std::filesystem::path& pmx)
 {
@@ -96,11 +108,13 @@ bool MmdAnimator::LoadMotion(const std::filesystem::path& vmd)
 	auto motion = std::make_unique<VmdMotion>();
 	if (motion->Load(vmd))
 	{
+		BeginPoseTransitionFromLastPose();
 		m_motion = std::move(motion);
 		m_time = 0.0;
 		m_pose = {};
 		m_paused = false;
 		DirectX::XMStoreFloat4x4(&m_motionTransform, DirectX::XMMatrixIdentity());
+		m_prevFrameForPhysicsValid = false;
 		if (m_physicsWorld) m_physicsWorld->Reset();
 		return true;
 	}
@@ -109,11 +123,13 @@ bool MmdAnimator::LoadMotion(const std::filesystem::path& vmd)
 
 void MmdAnimator::ClearMotion()
 {
+	BeginPoseTransitionFromLastPose();
 	m_motion.reset();
 	m_time = 0.0;
 	m_pose = {};
 	m_paused = false;
 	m_hasSkinnedPose = false;
+	m_prevFrameForPhysicsValid = false;
 	DirectX::XMStoreFloat4x4(&m_motionTransform, DirectX::XMMatrixIdentity());
 	if (m_physicsWorld) m_physicsWorld->Reset();
 }
@@ -253,10 +269,28 @@ void MmdAnimator::Tick(double dtSeconds)
 	}
 
 	// 物理リセット判定
-	if (motion && m_prevFrameForPhysicsValid)
 	{
-		if (currentFrame + 0.5f < m_prevFrameForPhysics ||
-			std::abs(currentFrame - m_prevFrameForPhysics) > 10.0f)
+		bool needsPhysicsReset = false;
+		bool loopedMotion = false;
+
+		if (motion && m_prevFrameForPhysicsValid)
+		{
+			if (currentFrame + 0.5f < m_prevFrameForPhysics)
+			{
+				loopedMotion = true;
+				needsPhysicsReset = true;
+			}
+			else if (std::abs(currentFrame - m_prevFrameForPhysics) > 10.0f)
+			{
+				needsPhysicsReset = true;
+			}
+		}
+
+		if (loopedMotion)
+		{
+			BeginPoseTransitionFromLastPose();
+		}
+		if (needsPhysicsReset)
 		{
 			if (m_physicsWorld) m_physicsWorld->Reset();
 		}
@@ -494,6 +528,8 @@ void MmdAnimator::Tick(double dtSeconds)
 		ApplyRot(m_boneIdxEyeR, qEyes);
 	}
 
+	ApplyPoseTransition(dtSeconds);
+
 	// 行列更新 (FK)
 	m_boneSolver->ApplyPose(m_pose);
 	m_boneSolver->UpdateMatrices();
@@ -516,6 +552,8 @@ void MmdAnimator::Tick(double dtSeconds)
 	m_hasSkinnedPose = true;
 	m_prevFrameForPhysics = currentFrame;
 	m_prevFrameForPhysicsValid = true;
+	m_lastPose = m_pose;
+	m_hasLastPose = true;
 
 	DirectX::XMStoreFloat4x4(&m_motionTransform, DirectX::XMMatrixIdentity());
 }
@@ -547,6 +585,10 @@ void MmdAnimator::SetModel(std::unique_ptr<PmxModel> model)
 	m_time = 0.0;
 	m_pose = {};
 	m_hasSkinnedPose = false;
+	m_hasLastPose = false;
+	m_hasTransitionPose = false;
+	m_transitionActive = false;
+	m_prevFrameForPhysicsValid = false;
 	m_boneSolver->Initialize(m_model.get());
 	if (m_physicsWorld) m_physicsWorld->Reset();
 	CacheLookAtBones();
@@ -951,4 +993,100 @@ void MmdAnimator::ApplySway(float phase, float strength, float motionScale)
 	const float shoulderRoll = roll * 0.35f + pitch * 0.12f;
 	applyRotation(L"左肩", 0.0f, 0.0f, shoulderRoll, 1.0f);
 	applyRotation(L"右肩", 0.0f, 0.0f, -shoulderRoll, 1.0f);
+}
+
+void MmdAnimator::ApplyPoseTransition(double dtSeconds)
+{
+	if (!m_transitionActive || !m_hasTransitionPose)
+	{
+		return;
+	}
+
+	m_transitionElapsed += dtSeconds;
+	float t = static_cast<float>(m_transitionElapsed / m_transitionDuration);
+	float alpha = std::clamp(t, 0.0f, 1.0f);
+	// smoothstep でフェード
+	alpha = alpha * alpha * (3.0f - 2.0f * alpha);
+
+	auto lerp = [](float a, float b, float s)
+		{
+			return a + (b - a) * s;
+		};
+
+	// --- ボーン平行移動 ---
+	for (auto& [name, target] : m_pose.boneTranslations)
+	{
+		DirectX::XMFLOAT3 from{ 0.0f, 0.0f, 0.0f };
+		auto it = m_transitionPose.boneTranslations.find(name);
+		if (it != m_transitionPose.boneTranslations.end())
+		{
+			from = it->second;
+		}
+
+		target.x = lerp(from.x, target.x, alpha);
+		target.y = lerp(from.y, target.y, alpha);
+		target.z = lerp(from.z, target.z, alpha);
+	}
+	for (const auto& [name, from] : m_transitionPose.boneTranslations)
+	{
+		if (m_pose.boneTranslations.find(name) != m_pose.boneTranslations.end()) continue;
+		m_pose.boneTranslations.insert_or_assign(name, DirectX::XMFLOAT3{
+			lerp(from.x, 0.0f, alpha),
+			lerp(from.y, 0.0f, alpha),
+			lerp(from.z, 0.0f, alpha)
+												 });
+	}
+
+	// --- ボーン回転 ---
+	auto LoadQuatOrIdentity = [](const std::unordered_map<std::wstring, DirectX::XMFLOAT4>& map, const std::wstring& name)
+		{
+			auto it = map.find(name);
+			if (it != map.end())
+			{
+				return DirectX::XMLoadFloat4(&it->second);
+			}
+			return DirectX::XMQuaternionIdentity();
+		};
+
+	for (auto& [name, target] : m_pose.boneRotations)
+	{
+		using namespace DirectX;
+		XMVECTOR toQ = XMQuaternionNormalize(XMLoadFloat4(&target));
+		XMVECTOR fromQ = XMQuaternionNormalize(LoadQuatOrIdentity(m_transitionPose.boneRotations, name));
+		XMVECTOR blended = XMQuaternionSlerp(fromQ, toQ, alpha);
+
+		XMStoreFloat4(&target, blended);
+	}
+	for (const auto& [name, from] : m_transitionPose.boneRotations)
+	{
+		if (m_pose.boneRotations.find(name) != m_pose.boneRotations.end()) continue;
+		using namespace DirectX;
+		XMVECTOR fromQ = XMQuaternionNormalize(XMLoadFloat4(&from));
+		XMVECTOR blended = XMQuaternionSlerp(fromQ, XMQuaternionIdentity(), alpha);
+		DirectX::XMFLOAT4 out{};
+		XMStoreFloat4(&out, blended);
+		m_pose.boneRotations.insert_or_assign(name, out);
+	}
+
+	// --- モーフ ---
+	for (auto& [name, target] : m_pose.morphWeights)
+	{
+		float from = 0.0f;
+		auto it = m_transitionPose.morphWeights.find(name);
+		if (it != m_transitionPose.morphWeights.end())
+		{
+			from = it->second;
+		}
+		target = lerp(from, target, alpha);
+	}
+	for (const auto& [name, from] : m_transitionPose.morphWeights)
+	{
+		if (m_pose.morphWeights.find(name) != m_pose.morphWeights.end()) continue;
+		m_pose.morphWeights.insert_or_assign(name, lerp(from, 0.0f, alpha));
+	}
+
+	if (t >= 1.0f)
+	{
+		m_transitionActive = false;
+	}
 }
