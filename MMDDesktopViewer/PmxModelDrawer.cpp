@@ -1,4 +1,4 @@
-#include "PmxModelDrawer.hpp"
+ï»¿#include "PmxModelDrawer.hpp"
 
 #include "d3dx12.hpp"
 #include "ExceptionHelper.hpp"
@@ -52,20 +52,20 @@ namespace
 		const std::wstring n = mat.name;
 		const std::wstring ne = mat.nameEn;
 
-		if (ContainsAnyW(n, { L"–Ú", L"“µ", L"eye", L"iris", L"pupil" }) ||
+		if (ContainsAnyW(n, { L"ç›®", L"ç³", L"eye", L"iris", L"pupil" }) ||
 			ContainsAnyW(ne, { L"eye", L"iris" })) return 4;
 
-		if (ContainsAnyW(n, { L"Šç", L"face", L"–j", L"‚Ù‚Ù" }) ||
+		if (ContainsAnyW(n, { L"é¡”", L"face", L"é ¬", L"ã»ã»" }) ||
 			ContainsAnyW(ne, { L"face", L"cheek" })) return 3;
 
-		if (ContainsAnyW(n, { L"”¯", L"hair", L"ƒwƒA" }) ||
+		if (ContainsAnyW(n, { L"é«ª", L"hair", L"ãƒ˜ã‚¢" }) ||
 			ContainsAnyW(ne, { L"hair" })) return 2;
 
-		if (ContainsAnyW(n, { L"”§", L"skin" }) ||
+		if (ContainsAnyW(n, { L"è‚Œ", L"skin" }) ||
 			ContainsAnyW(ne, { L"skin" })) return 1;
 
 		if (mat.diffuse[3] < 0.98f ||
-			ContainsAnyW(n, { L"glass", L"“§–¾" }) ||
+			ContainsAnyW(n, { L"glass", L"é€æ˜" }) ||
 			ContainsAnyW(ne, { L"glass", L"transparent" })) return 5;
 
 		const float avg = (mat.diffuse[0] + mat.diffuse[1] + mat.diffuse[2]) / 3.0f;
@@ -83,9 +83,9 @@ namespace
 		if (low.find(L"face") != std::wstring::npos) return true;
 		if (low.find(L"facial") != std::wstring::npos) return true;
 
-		if (all.find(L"Šç") != std::wstring::npos) return true;
-		if (all.find(L"‚©‚¨") != std::wstring::npos) return true;
-		if (all.find(L"“ª•”") != std::wstring::npos) return true;
+		if (all.find(L"é¡”") != std::wstring::npos) return true;
+		if (all.find(L"ã‹ãŠ") != std::wstring::npos) return true;
+		if (all.find(L"é ­éƒ¨") != std::wstring::npos) return true;
 
 		return false;
 	}
@@ -120,8 +120,8 @@ namespace
 	{
 		if (ContainsAnyW(m.name + L" " + m.nameEn + L" " + m.memo,
 						 { L"eye", L"iris", L"pupil", L"eyeball", L"lash", L"eyelash", L"eyeline",
-						   L"hitomi", L"matsuge", L"matuge", L"–Ú", L"“µ", L"”’–Ú", L"“øÊ",
-						   L"‚Ü‚Â–Ñ", L"‚Ü‚Â‚°", L"áÊ–Ñ", L"ƒAƒCƒ‰ƒCƒ“" }))
+						   L"hitomi", L"matsuge", L"matuge", L"ç›®", L"ç³", L"ç™½ç›®", L"è™¹å½©",
+						   L"ã¾ã¤æ¯›", L"ã¾ã¤ã’", L"ç«æ¯›", L"ã‚¢ã‚¤ãƒ©ã‚¤ãƒ³" }))
 		{
 			return true;
 		}
@@ -246,7 +246,7 @@ void PmxModelDrawer::EnsurePmxResources(const PmxModel* model, const LightSettin
 		DX_CALL(m_ctx->Device()->CreateCommittedResource(
 			&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
 			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-			IID_PPV_ARGS(&m_pmx.vb)));
+			IID_PPV_ARGS(m_pmx.vb.put())));
 
 		void* mapped = nullptr;
 		CD3DX12_RANGE range(0, 0);
@@ -264,7 +264,7 @@ void PmxModelDrawer::EnsurePmxResources(const PmxModel* model, const LightSettin
 		DX_CALL(m_ctx->Device()->CreateCommittedResource(
 			&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
 			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-			IID_PPV_ARGS(&m_pmx.ib)));
+			IID_PPV_ARGS(m_pmx.ib.put())));
 
 		void* mapped = nullptr;
 		CD3DX12_RANGE range(0, 0);
@@ -287,7 +287,7 @@ void PmxModelDrawer::EnsurePmxResources(const PmxModel* model, const LightSettin
 			DX_CALL(m_ctx->Device()->CreateCommittedResource(
 				&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
 				D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-				IID_PPV_ARGS(&m_materialCb)));
+				IID_PPV_ARGS(m_materialCb.put())));
 
 			CD3DX12_RANGE range(0, 0);
 			DX_CALL(m_materialCb->Map(0, &range, reinterpret_cast<void**>(&m_materialCbMapped)));

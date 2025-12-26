@@ -18,27 +18,27 @@ void Dx12Context::CreateFactory()
 #if defined(_DEBUG)
 	flags = DXGI_CREATE_FACTORY_DEBUG;
 #endif
-	DX_CALL(CreateDXGIFactory2(flags, IID_PPV_ARGS(&m_factory)));
+	DX_CALL(CreateDXGIFactory2(flags, IID_PPV_ARGS(m_factory.put())));
 }
 
 void Dx12Context::CreateDevice()
 {
 	struct Candidate
 	{
-		Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+		winrt::com_ptr<IDXGIAdapter1> adapter;
 		DXGI_ADAPTER_DESC1 desc{};
 		int64_t score{};
 	};
 	std::vector<Candidate> candidates;
 
-	Microsoft::WRL::ComPtr<IDXGIFactory6> factory6;
-	m_factory.As(&factory6);
+	winrt::com_ptr<IDXGIFactory6> factory6;
+	m_factory.as(__uuidof(IDXGIFactory6), factory6.put_void());
 
 	auto collectAdapter = [&](IDXGIAdapter1* rawAdapter)
 		{
 			if (!rawAdapter) return;
 			Candidate c{};
-			c.adapter = rawAdapter;
+			c.adapter.copy_from(rawAdapter);
 			c.adapter->GetDesc1(&c.desc);
 			if (c.desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) return;
 			candidates.push_back(std::move(c));
@@ -48,12 +48,12 @@ void Dx12Context::CreateDevice()
 	{
 		for (UINT i = 0;; ++i)
 		{
-			Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
-			if (factory6->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter)) == DXGI_ERROR_NOT_FOUND)
+			winrt::com_ptr<IDXGIAdapter1> adapter;
+			if (factory6->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(adapter.put())) == DXGI_ERROR_NOT_FOUND)
 			{
 				break;
 			}
-			collectAdapter(adapter.Get());
+			collectAdapter(adapter.get());
 		}
 	}
 
@@ -61,9 +61,9 @@ void Dx12Context::CreateDevice()
 	{
 		for (UINT i = 0;; ++i)
 		{
-			Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
-			if (m_factory->EnumAdapters1(i, &adapter) == DXGI_ERROR_NOT_FOUND) break;
-			collectAdapter(adapter.Get());
+			winrt::com_ptr<IDXGIAdapter1> adapter;
+			if (m_factory->EnumAdapters1(i, adapter.put()) == DXGI_ERROR_NOT_FOUND) break;
+			collectAdapter(adapter.get());
 		}
 	}
 
@@ -102,14 +102,14 @@ void Dx12Context::CreateDevice()
 
 	for (const auto& c : candidates)
 	{
-		if (SUCCEEDED(D3D12CreateDevice(c.adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&m_device))))
+		if (SUCCEEDED(D3D12CreateDevice(c.adapter.get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(m_device.put()))))
 		{
 			return;
 		}
 	}
 
 	// Fallback to WARP only if needed; but you said DX12 is available.
-	DX_CALL(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&m_device)));
+	DX_CALL(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(m_device.put())));
 }
 
 void Dx12Context::CreateQueue()
@@ -118,5 +118,5 @@ void Dx12Context::CreateQueue()
 	desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
 	desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
 
-	DX_CALL(m_device->CreateCommandQueue(&desc, IID_PPV_ARGS(&m_queue)));
+	DX_CALL(m_device->CreateCommandQueue(&desc, IID_PPV_ARGS(m_queue.put())));
 }

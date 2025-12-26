@@ -190,7 +190,7 @@ void GpuResourceManager::CreateSrvHeap()
 	desc.NumDescriptors = 4096;
 	desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
-	DX_CALL(m_ctx->Device()->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&m_srvHeap)));
+	DX_CALL(m_ctx->Device()->CreateDescriptorHeap(&desc, IID_PPV_ARGS(m_srvHeap.put())));
 	m_srvDescriptorSize = m_ctx->Device()->GetDescriptorHandleIncrementSize(
 		D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
 	);
@@ -201,12 +201,12 @@ void GpuResourceManager::CreateUploadObjects()
 	if (m_uploadAlloc && m_uploadCmdList) return;
 
 	DX_CALL(m_ctx->Device()->CreateCommandAllocator(
-		D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_uploadAlloc)));
+		D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(m_uploadAlloc.put())));
 
 	DX_CALL(m_ctx->Device()->CreateCommandList(
 		0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-		m_uploadAlloc.Get(), nullptr,
-		IID_PPV_ARGS(&m_uploadCmdList)));
+		m_uploadAlloc.get(), nullptr,
+		IID_PPV_ARGS(m_uploadCmdList.put())));
 
 	m_uploadCmdList->Close();
 }
@@ -270,7 +270,7 @@ uint32_t GpuResourceManager::CreateWhiteTexture1x1()
 	srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	srv.Texture2D.MipLevels = 1;
 
-	m_ctx->Device()->CreateShaderResourceView(tex.Get(), &srv, GetSrvCpuHandle(srvIndex));
+	m_ctx->Device()->CreateShaderResourceView(tex.get(), &srv, GetSrvCpuHandle(srvIndex));
 
 	m_textures.push_back(GpuTexture{ tex, srvIndex, 1, 1 });
 
@@ -308,7 +308,7 @@ uint32_t GpuResourceManager::CreateDefaultToonRamp()
 	srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	srv.Texture2D.MipLevels = 1;
 
-	m_ctx->Device()->CreateShaderResourceView(tex.Get(), &srv, GetSrvCpuHandle(srvIndex));
+	m_ctx->Device()->CreateShaderResourceView(tex.get(), &srv, GetSrvCpuHandle(srvIndex));
 
 	m_textures.push_back(GpuTexture{ tex, srvIndex, 256, 1 });
 
@@ -342,7 +342,7 @@ uint32_t GpuResourceManager::LoadTextureSrv(const std::filesystem::path& path)
 	srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	srv.Texture2D.MipLevels = (UINT)mips.size();
 
-	m_ctx->Device()->CreateShaderResourceView(tex.Get(), &srv, GetSrvCpuHandle(srvIndex));
+	m_ctx->Device()->CreateShaderResourceView(tex.get(), &srv, GetSrvCpuHandle(srvIndex));
 
 	m_textures.push_back(GpuTexture{ tex, srvIndex, img.width, img.height });
 
@@ -350,7 +350,7 @@ uint32_t GpuResourceManager::LoadTextureSrv(const std::filesystem::path& path)
 	return srvIndex;
 }
 
-Microsoft::WRL::ComPtr<ID3D12Resource>
+winrt::com_ptr<ID3D12Resource>
 GpuResourceManager::CreateTexture2DFromRgbaMips(
 	uint32_t width, uint32_t height,
 	const std::vector<std::vector<uint8_t>>& mips)
@@ -365,22 +365,22 @@ GpuResourceManager::CreateTexture2DFromRgbaMips(
 		1, (UINT16)mips.size()
 	);
 
-	Microsoft::WRL::ComPtr<ID3D12Resource> tex;
+	winrt::com_ptr<ID3D12Resource> tex;
 	DX_CALL(m_ctx->Device()->CreateCommittedResource(
 		&heapProps, D3D12_HEAP_FLAG_NONE, &desc,
 		D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-		IID_PPV_ARGS(&tex)));
+		IID_PPV_ARGS(tex.put())));
 
-	const UINT64 uploadSize = GetRequiredIntermediateSize(tex.Get(), 0, (UINT)mips.size());
+	const UINT64 uploadSize = GetRequiredIntermediateSize(tex.get(), 0, (UINT)mips.size());
 
 	auto upHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
 	auto upDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
 
-	Microsoft::WRL::ComPtr<ID3D12Resource> upload;
+	winrt::com_ptr<ID3D12Resource> upload;
 	DX_CALL(m_ctx->Device()->CreateCommittedResource(
 		&upHeap, D3D12_HEAP_FLAG_NONE, &upDesc,
 		D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-		IID_PPV_ARGS(&upload)));
+		IID_PPV_ARGS(upload.put())));
 
 	std::vector<D3D12_SUBRESOURCE_DATA> subs;
 	subs.reserve(mips.size());
@@ -399,20 +399,20 @@ GpuResourceManager::CreateTexture2DFromRgbaMips(
 	}
 
 	m_uploadAlloc->Reset();
-	m_uploadCmdList->Reset(m_uploadAlloc.Get(), nullptr);
+	m_uploadCmdList->Reset(m_uploadAlloc.get(), nullptr);
 
 	UpdateSubresources(
-		m_uploadCmdList.Get(), tex.Get(), upload.Get(),
+		m_uploadCmdList.get(), tex.get(), upload.get(),
 		0, 0, (UINT)subs.size(), subs.data());
 
 	auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-		tex.Get(),
+		tex.get(),
 		D3D12_RESOURCE_STATE_COPY_DEST,
 		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	m_uploadCmdList->ResourceBarrier(1, &barrier);
 
 	m_uploadCmdList->Close();
-	ID3D12CommandList* lists[] = { m_uploadCmdList.Get() };
+	ID3D12CommandList* lists[] = { m_uploadCmdList.get() };
 	m_ctx->Queue()->ExecuteCommandLists(1, lists);
 
 	if (m_waitForGpu)
@@ -423,7 +423,7 @@ GpuResourceManager::CreateTexture2DFromRgbaMips(
 	return tex;
 }
 
-Microsoft::WRL::ComPtr<ID3D12Resource>
+winrt::com_ptr<ID3D12Resource>
 GpuResourceManager::CreateTexture2DFromRgba(const uint8_t* rgba, uint32_t width, uint32_t height)
 {
 	if (!rgba || width == 0 || height == 0)
@@ -442,22 +442,22 @@ GpuResourceManager::CreateTexture2DFromRgba(const uint8_t* rgba, uint32_t width,
 	auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(
 		DXGI_FORMAT_R8G8B8A8_UNORM, width, height);
 
-	Microsoft::WRL::ComPtr<ID3D12Resource> tex;
+	winrt::com_ptr<ID3D12Resource> tex;
 	DX_CALL(device->CreateCommittedResource(
 		&heapProps, D3D12_HEAP_FLAG_NONE, &texDesc,
 		D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-		IID_PPV_ARGS(&tex)));
+		IID_PPV_ARGS(tex.put())));
 
-	const UINT64 uploadSize = GetRequiredIntermediateSize(tex.Get(), 0, 1);
+	const UINT64 uploadSize = GetRequiredIntermediateSize(tex.get(), 0, 1);
 
 	auto upHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
 	auto upDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
 
-	Microsoft::WRL::ComPtr<ID3D12Resource> upload;
+	winrt::com_ptr<ID3D12Resource> upload;
 	DX_CALL(device->CreateCommittedResource(
 		&upHeap, D3D12_HEAP_FLAG_NONE, &upDesc,
 		D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-		IID_PPV_ARGS(&upload)));
+		IID_PPV_ARGS(upload.put())));
 
 	D3D12_SUBRESOURCE_DATA sub{};
 	sub.pData = rgba;
@@ -465,22 +465,22 @@ GpuResourceManager::CreateTexture2DFromRgba(const uint8_t* rgba, uint32_t width,
 	sub.SlicePitch = sub.RowPitch * height;
 
 	m_uploadAlloc->Reset();
-	m_uploadCmdList->Reset(m_uploadAlloc.Get(), nullptr);
+	m_uploadCmdList->Reset(m_uploadAlloc.get(), nullptr);
 
 	UpdateSubresources(
-		m_uploadCmdList.Get(),
-		tex.Get(), upload.Get(),
+		m_uploadCmdList.get(),
+		tex.get(), upload.get(),
 		0, 0, 1, &sub);
 
 	auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-		tex.Get(),
+		tex.get(),
 		D3D12_RESOURCE_STATE_COPY_DEST,
 		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
 	m_uploadCmdList->ResourceBarrier(1, &barrier);
 
 	m_uploadCmdList->Close();
-	ID3D12CommandList* lists[] = { m_uploadCmdList.Get() };
+	ID3D12CommandList* lists[] = { m_uploadCmdList.get() };
 	m_ctx->Queue()->ExecuteCommandLists(1, lists);
 
 	if (m_waitForGpu)
@@ -499,7 +499,7 @@ void GpuResourceManager::ResetReadbackBuffers()
 		{
 			m_readbackBuffers[i]->Unmap(0, nullptr);
 			m_readbackMapped[i] = nullptr;
-			m_readbackBuffers[i].Reset();
+			m_readbackBuffers[i] = nullptr;
 		}
 	}
 }
@@ -528,7 +528,7 @@ void GpuResourceManager::CreateReadbackBuffers(UINT width, UINT height)
 		DX_CALL(device->CreateCommittedResource(
 			&heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
 			D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-			IID_PPV_ARGS(&m_readbackBuffers[i])));
+			IID_PPV_ARGS(m_readbackBuffers[i].put())));
 
 		DX_CALL(m_readbackBuffers[i]->Map(0, nullptr, &m_readbackMapped[i]));
 	}
@@ -537,7 +537,7 @@ void GpuResourceManager::CreateReadbackBuffers(UINT width, UINT height)
 ID3D12Resource* GpuResourceManager::GetReadbackBuffer(UINT index) const
 {
 	if (index >= m_readbackBuffers.size()) return nullptr;
-	return m_readbackBuffers[index].Get();
+	return m_readbackBuffers[index].get();
 }
 
 void* GpuResourceManager::GetReadbackMapped(UINT index) const

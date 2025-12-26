@@ -316,9 +316,9 @@ void DcompRenderer::Initialize(HWND hwnd, ProgressCallback progress)
 
 void DcompRenderer::ReleaseIntermediateResources()
 {
-	m_intermediateTex.Reset();
-	m_intermediateRtvHeap.Reset();
-	m_intermediateSrvHeap.Reset();
+	m_intermediateTex = nullptr;
+	m_intermediateRtvHeap = nullptr;
+	m_intermediateSrvHeap = nullptr;
 }
 
 void DcompRenderer::CreateIntermediateResources()
@@ -341,21 +341,21 @@ void DcompRenderer::CreateIntermediateResources()
 	DX_CALL(m_ctx.Device()->CreateCommittedResource(
 		&heapProps, D3D12_HEAP_FLAG_NONE, &desc,
 		D3D12_RESOURCE_STATE_RENDER_TARGET, &clear,
-		IID_PPV_ARGS(&m_intermediateTex)));
+		IID_PPV_ARGS(m_intermediateTex.put())));
 
 	D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
 	rtvHeapDesc.NumDescriptors = 1;
 	rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 	rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-	DX_CALL(m_ctx.Device()->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&m_intermediateRtvHeap)));
+	DX_CALL(m_ctx.Device()->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(m_intermediateRtvHeap.put())));
 	m_intermediateRtvHandle = m_intermediateRtvHeap->GetCPUDescriptorHandleForHeapStart();
-	m_ctx.Device()->CreateRenderTargetView(m_intermediateTex.Get(), nullptr, m_intermediateRtvHandle);
+	m_ctx.Device()->CreateRenderTargetView(m_intermediateTex.get(), nullptr, m_intermediateRtvHandle);
 
 	D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc{};
 	srvHeapDesc.NumDescriptors = 1;
 	srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-	DX_CALL(m_ctx.Device()->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&m_intermediateSrvHeap)));
+	DX_CALL(m_ctx.Device()->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(m_intermediateSrvHeap.put())));
 
 	m_intermediateSrvCpuHandle = m_intermediateSrvHeap->GetCPUDescriptorHandleForHeapStart();
 	m_intermediateSrvGpuHandle = m_intermediateSrvHeap->GetGPUDescriptorHandleForHeapStart();
@@ -365,7 +365,7 @@ void DcompRenderer::CreateIntermediateResources()
 	srvDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
 	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	srvDesc.Texture2D.MipLevels = 1;
-	m_ctx.Device()->CreateShaderResourceView(m_intermediateTex.Get(), &srvDesc, m_intermediateSrvCpuHandle);
+	m_ctx.Device()->CreateShaderResourceView(m_intermediateTex.get(), &srvDesc, m_intermediateSrvCpuHandle);
 }
 
 void DcompRenderer::CreateSceneBuffers()
@@ -378,7 +378,7 @@ void DcompRenderer::CreateSceneBuffers()
 		DX_CALL(m_ctx.Device()->CreateCommittedResource(
 			&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
 			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-			IID_PPV_ARGS(&m_sceneCb[i])));
+			IID_PPV_ARGS(m_sceneCb[i].put())));
 
 		void* mapped = nullptr;
 		CD3DX12_RANGE range(0, 0);
@@ -398,7 +398,7 @@ void DcompRenderer::CreateBoneBuffers()
 		DX_CALL(m_ctx.Device()->CreateCommittedResource(
 			&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
 			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-			IID_PPV_ARGS(&m_boneCb[i])));
+			IID_PPV_ARGS(m_boneCb[i].put())));
 
 		void* mapped = nullptr;
 		CD3DX12_RANGE range(0, 0);
@@ -417,16 +417,16 @@ void DcompRenderer::CreateCommandObjects()
 	for (UINT i = 0; i < FrameCount; ++i)
 	{
 		DX_CALL(m_ctx.Device()->CreateCommandAllocator(
-			D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_alloc[i])));
+			D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(m_alloc[i].put())));
 	}
 
 	DX_CALL(m_ctx.Device()->CreateCommandList(
-		0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_alloc[0].Get(), nullptr,
-		IID_PPV_ARGS(&m_cmdList)));
+		0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_alloc[0].get(), nullptr,
+		IID_PPV_ARGS(m_cmdList.put())));
 	m_cmdList->Close();
 
 	DX_CALL(m_ctx.Device()->CreateFence(
-		0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)));
+		0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(m_fence.put())));
 	m_fenceValue = 1;
 
 	m_fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -442,7 +442,7 @@ void DcompRenderer::CreateCommandObjects()
 		heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 
 		DX_CALL(m_ctx.Device()->CreateDescriptorHeap(
-			&heapDesc, IID_PPV_ARGS(&m_rtvHeap)));
+			&heapDesc, IID_PPV_ARGS(m_rtvHeap.put())));
 		m_rtvDescriptorSize = m_ctx.Device()->GetDescriptorHandleIncrementSize(
 			D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 	}
@@ -454,7 +454,7 @@ void DcompRenderer::CreateCommandObjects()
 		dsvDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 
 		DX_CALL(m_ctx.Device()->CreateDescriptorHeap(
-			&dsvDesc, IID_PPV_ARGS(&m_dsvHeap)));
+			&dsvDesc, IID_PPV_ARGS(m_dsvHeap.put())));
 	}
 }
 
@@ -463,9 +463,9 @@ void DcompRenderer::CreateSwapChain()
 	DXGI_SWAP_CHAIN_DESC1 desc = MakeSwapChainDesc(m_width, m_height);
 
 	DX_CALL(m_ctx.Factory()->CreateSwapChainForComposition(
-		m_ctx.Queue(), &desc, nullptr, &m_swapChain1));
+		m_ctx.Queue(), &desc, nullptr, m_swapChain1.put()));
 
-	DX_CALL(m_swapChain1.As(&m_swapChain));
+	DX_CALL(m_swapChain1->QueryInterface(__uuidof(IDXGISwapChain3), m_swapChain.put_void()));
 }
 
 void DcompRenderer::CreateRenderTargets()
@@ -473,8 +473,8 @@ void DcompRenderer::CreateRenderTargets()
 	auto handle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
 	for (UINT i = 0; i < FrameCount; ++i)
 	{
-		DX_CALL(m_swapChain->GetBuffer(i, IID_PPV_ARGS(&m_renderTargets[i])));
-		m_ctx.Device()->CreateRenderTargetView(m_renderTargets[i].Get(), nullptr, handle);
+		DX_CALL(m_swapChain->GetBuffer(i, IID_PPV_ARGS(m_renderTargets[i].put())));
+		m_ctx.Device()->CreateRenderTargetView(m_renderTargets[i].get(), nullptr, handle);
 		handle.ptr += m_rtvDescriptorSize;
 	}
 }
@@ -482,15 +482,15 @@ void DcompRenderer::CreateRenderTargets()
 void DcompRenderer::CreateDComp()
 {
 	DX_CALL(DCompositionCreateDevice(
-		nullptr, IID_PPV_ARGS(&m_dcompDevice)));
+		nullptr, IID_PPV_ARGS(m_dcompDevice.put())));
 
-	DX_CALL(m_dcompDevice->CreateTargetForHwnd(m_hwnd, TRUE, &m_dcompTarget));
+	DX_CALL(m_dcompDevice->CreateTargetForHwnd(m_hwnd, TRUE, m_dcompTarget.put()));
 
-	DX_CALL(m_dcompDevice->CreateVisual(&m_dcompVisual));
+	DX_CALL(m_dcompDevice->CreateVisual(m_dcompVisual.put()));
 
-	DX_CALL(m_dcompVisual->SetContent(m_swapChain.Get()));
+	DX_CALL(m_dcompVisual->SetContent(m_swapChain.get()));
 
-	DX_CALL(m_dcompTarget->SetRoot(m_dcompVisual.Get()));
+	DX_CALL(m_dcompTarget->SetRoot(m_dcompVisual.get()));
 
 	DX_CALL(m_dcompDevice->Commit());
 }
@@ -508,10 +508,10 @@ void DcompRenderer::ResizeIfNeeded()
 
 	for (UINT i = 0; i < FrameCount; ++i)
 	{
-		m_renderTargets[i].Reset();
+		m_renderTargets[i] = nullptr;
 	}
 
-	m_depth.Reset();
+	m_depth = nullptr;
 
 	DX_CALL(m_swapChain->ResizeBuffers(
 		FrameCount, m_width, m_height, DXGI_FORMAT_R10G10B10A2_UNORM, 0));
@@ -691,7 +691,7 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	m_pmxDrawer.UpdateMaterialSettings(m_lightSettings);
 
 	m_alloc[frameIndex]->Reset();
-	m_cmdList->Reset(m_alloc[frameIndex].Get(), nullptr);
+	m_cmdList->Reset(m_alloc[frameIndex].get(), nullptr);
 
 	m_pmxDrawer.UpdateBoneMatrices(animator, m_boneCbMapped[frameIndex]);
 
@@ -710,7 +710,7 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 		if (m_msaaColorState != D3D12_RESOURCE_STATE_RENDER_TARGET)
 		{
 			auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-				m_msaaColor.Get(), m_msaaColorState, D3D12_RESOURCE_STATE_RENDER_TARGET);
+				m_msaaColor.get(), m_msaaColorState, D3D12_RESOURCE_STATE_RENDER_TARGET);
 			m_cmdList->ResourceBarrier(1, &barrier);
 			m_msaaColorState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 		}
@@ -720,7 +720,7 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 		if (s_interState != D3D12_RESOURCE_STATE_RENDER_TARGET)
 		{
 			auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-				m_intermediateTex.Get(), s_interState, D3D12_RESOURCE_STATE_RENDER_TARGET);
+				m_intermediateTex.get(), s_interState, D3D12_RESOURCE_STATE_RENDER_TARGET);
 			m_cmdList->ResourceBarrier(1, &barrier);
 			s_interState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 		}
@@ -867,21 +867,21 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	if (useMsaa)
 	{
 		auto b1 = CD3DX12_RESOURCE_BARRIER::Transition(
-			m_msaaColor.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
+			m_msaaColor.get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
 		auto b2 = CD3DX12_RESOURCE_BARRIER::Transition(
-			m_intermediateTex.Get(), s_interState, D3D12_RESOURCE_STATE_RESOLVE_DEST);
+			m_intermediateTex.get(), s_interState, D3D12_RESOURCE_STATE_RESOLVE_DEST);
 
 		D3D12_RESOURCE_BARRIER barriers[] = { b1, b2 };
 		m_cmdList->ResourceBarrier(2, barriers);
 
 		m_cmdList->ResolveSubresource(
-			m_intermediateTex.Get(), 0, m_msaaColor.Get(), 0, DXGI_FORMAT_R10G10B10A2_UNORM);
+			m_intermediateTex.get(), 0, m_msaaColor.get(), 0, DXGI_FORMAT_R10G10B10A2_UNORM);
 
 		m_msaaColorState = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
 		s_interState = D3D12_RESOURCE_STATE_RESOLVE_DEST;
 
 		auto b3 = CD3DX12_RESOURCE_BARRIER::Transition(
-			m_msaaColor.Get(), D3D12_RESOURCE_STATE_RESOLVE_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+			m_msaaColor.get(), D3D12_RESOURCE_STATE_RESOLVE_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
 		m_cmdList->ResourceBarrier(1, &b3);
 		m_msaaColorState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 	}
@@ -889,10 +889,10 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	{
 		D3D12_RESOURCE_BARRIER barriers[2];
 		barriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(
-			m_intermediateTex.Get(), s_interState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+			m_intermediateTex.get(), s_interState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
 		barriers[1] = CD3DX12_RESOURCE_BARRIER::Transition(
-			m_renderTargets[frameIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+			m_renderTargets[frameIndex].get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
 		m_cmdList->ResourceBarrier(2, barriers);
 		s_interState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -902,7 +902,7 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 	backBufferRtv.ptr += (SIZE_T)frameIndex * m_rtvDescriptorSize;
 	m_cmdList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
 
-	ID3D12DescriptorHeap* fxaaHeaps[] = { m_intermediateSrvHeap.Get() };
+	ID3D12DescriptorHeap* fxaaHeaps[] = { m_intermediateSrvHeap.get() };
 	m_cmdList->SetDescriptorHeaps(1, fxaaHeaps);
 
 	m_cmdList->SetGraphicsRootSignature(m_pipeline.GetFxaaRootSignature());
@@ -918,34 +918,34 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 
 	{
 		auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-			m_renderTargets[frameIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+			m_renderTargets[frameIndex].get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 		m_cmdList->ResourceBarrier(1, &barrier);
 	}
 
 	if (auto* readbackBuffer = m_gpuResources.GetReadbackBuffer(frameIndex))
 	{
 		auto b1 = CD3DX12_RESOURCE_BARRIER::Transition(
-			m_renderTargets[frameIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+			m_renderTargets[frameIndex].get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
 		m_cmdList->ResourceBarrier(1, &b1);
 
 		CD3DX12_TEXTURE_COPY_LOCATION dst(readbackBuffer, m_gpuResources.GetReadbackFootprint());
-		CD3DX12_TEXTURE_COPY_LOCATION src(m_renderTargets[frameIndex].Get(), 0);
+		CD3DX12_TEXTURE_COPY_LOCATION src(m_renderTargets[frameIndex].get(), 0);
 
 		m_cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
 
 		auto b2 = CD3DX12_RESOURCE_BARRIER::Transition(
-			m_renderTargets[frameIndex].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
+			m_renderTargets[frameIndex].get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
 		m_cmdList->ResourceBarrier(1, &b2);
 	}
 
 	m_cmdList->Close();
-	ID3D12CommandList* lists[] = { m_cmdList.Get() };
+	ID3D12CommandList* lists[] = { m_cmdList.get() };
 	m_ctx.Queue()->ExecuteCommandLists(1, lists);
 
 	m_swapChain->Present(1, 0);
 
 	const UINT64 signalValue = m_fenceValue++;
-	m_ctx.Queue()->Signal(m_fence.Get(), signalValue);
+	m_ctx.Queue()->Signal(m_fence.get(), signalValue);
 	m_frameFenceValues[frameIndex] = signalValue;
 
 	WaitForFrame(frameIndex);
@@ -955,7 +955,7 @@ void DcompRenderer::Render(const MmdAnimator& animator)
 void DcompRenderer::WaitForGpu()
 {
 	const UINT64 fenceToWait = m_fenceValue++;
-	m_ctx.Queue()->Signal(m_fence.Get(), fenceToWait);
+	m_ctx.Queue()->Signal(m_fence.get(), fenceToWait);
 
 	if (m_fence->GetCompletedValue() < fenceToWait)
 	{
@@ -972,7 +972,7 @@ void DcompRenderer::CreateDepthBuffer()
 		throw std::runtime_error("DSV heap not created.");
 	}
 
-	m_depth.Reset();
+	m_depth = nullptr;
 
 	D3D12_CLEAR_VALUE clear{};
 	clear.Format = DXGI_FORMAT_D32_FLOAT;
@@ -992,10 +992,10 @@ void DcompRenderer::CreateDepthBuffer()
 	DX_CALL(m_ctx.Device()->CreateCommittedResource(
 		&heapProps, D3D12_HEAP_FLAG_NONE, &desc,
 		D3D12_RESOURCE_STATE_DEPTH_WRITE,
-		&clear, IID_PPV_ARGS(&m_depth)));
+		&clear, IID_PPV_ARGS(m_depth.put())));
 
 	m_dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
-	m_ctx.Device()->CreateDepthStencilView(m_depth.Get(), nullptr, m_dsvHandle);
+	m_ctx.Device()->CreateDepthStencilView(m_depth.get(), nullptr, m_dsvHandle);
 }
 
 void DcompRenderer::WaitForFrame(UINT frameIndex)
@@ -1017,9 +1017,9 @@ void DcompRenderer::UpdateMsaaSettings()
 
 void DcompRenderer::ReleaseMsaaTargets()
 {
-	m_msaaColor.Reset();
-	m_msaaRtvHeap.Reset();
-	m_depth.Reset();
+	m_msaaColor = nullptr;
+	m_msaaRtvHeap = nullptr;
+	m_depth = nullptr;
 }
 
 void DcompRenderer::CreateMsaaTargets()
@@ -1029,15 +1029,15 @@ void DcompRenderer::CreateMsaaTargets()
 
 	if (m_msaaSampleCount <= 1)
 	{
-		m_msaaColor.Reset();
-		m_msaaRtvHeap.Reset();
+		m_msaaColor = nullptr;
+		m_msaaRtvHeap = nullptr;
 		m_msaaColorState = D3D12_RESOURCE_STATE_COMMON;
 		return;
 	}
 
 	// Create MSAA color target
-	m_msaaColor.Reset();
-	m_msaaRtvHeap.Reset();
+	m_msaaColor = nullptr;
+	m_msaaRtvHeap = nullptr;
 
 	D3D12_CLEAR_VALUE clear{};
 	clear.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
@@ -1058,7 +1058,7 @@ void DcompRenderer::CreateMsaaTargets()
 	DX_CALL(m_ctx.Device()->CreateCommittedResource(
 		&heapProps, D3D12_HEAP_FLAG_NONE, &colorDesc,
 		D3D12_RESOURCE_STATE_RENDER_TARGET,
-		&clear, IID_PPV_ARGS(&m_msaaColor)));
+		&clear, IID_PPV_ARGS(m_msaaColor.put())));
 
 	m_msaaColorState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
@@ -1069,11 +1069,11 @@ void DcompRenderer::CreateMsaaTargets()
 	rtvDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 
 	DX_CALL(m_ctx.Device()->CreateDescriptorHeap(
-		&rtvDesc, IID_PPV_ARGS(&m_msaaRtvHeap)));
+		&rtvDesc, IID_PPV_ARGS(m_msaaRtvHeap.put())));
 
 	m_msaaRtvHandle = m_msaaRtvHeap->GetCPUDescriptorHandleForHeapStart();
 	m_ctx.Device()->CreateRenderTargetView(
-		m_msaaColor.Get(), nullptr, m_msaaRtvHandle);
+		m_msaaColor.get(), nullptr, m_msaaRtvHandle);
 }
 
 void DcompRenderer::SelectMaximumMsaa()

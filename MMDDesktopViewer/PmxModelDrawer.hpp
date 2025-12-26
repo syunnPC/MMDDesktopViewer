@@ -1,7 +1,7 @@
 #pragma once
 
 #include <d3d12.h>
-#include <wrl.h>
+#include <winrt/base.h>
 
 #include <cstdint>
 #include <vector>
@@ -65,8 +65,8 @@ public:
 
 	struct PmxGpu
 	{
-		Microsoft::WRL::ComPtr<ID3D12Resource> vb;
-		Microsoft::WRL::ComPtr<ID3D12Resource> ib;
+		winrt::com_ptr<ID3D12Resource> vb;
+		winrt::com_ptr<ID3D12Resource> ib;
 		D3D12_VERTEX_BUFFER_VIEW vbv{};
 		D3D12_INDEX_BUFFER_VIEW ibv{};
 		std::vector<PmxGpuMaterial> materials;
@@ -93,7 +93,7 @@ public:
 
 	ID3D12Resource* GetMaterialCb() const
 	{
-		return m_materialCb.Get();
+		return m_materialCb.get();
 	}
 	uint8_t* GetMaterialCbMapped() const
 	{
@@ -112,7 +112,7 @@ private:
 
 	PmxGpu m_pmx;
 
-	Microsoft::WRL::ComPtr<ID3D12Resource> m_materialCb;
+	winrt::com_ptr<ID3D12Resource> m_materialCb;
 	uint8_t* m_materialCbMapped = nullptr;
 	UINT64 m_materialCbStride = 256;
 
