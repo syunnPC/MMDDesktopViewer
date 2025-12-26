@@ -177,6 +177,15 @@ private:
 	int32_t m_boneIdxEyeL{ -1 };
 	int32_t m_boneIdxEyeR{ -1 };
 
+	BonePose m_lastPose{};
+	bool m_hasLastPose{ false };
+	BonePose m_transitionPose{};
+	bool m_hasTransitionPose{ false };
+	bool m_transitionActive{ false };
+	double m_transitionElapsed{ 0.0 };
+	double m_transitionDuration{ 0.3 };
+	bool m_transitionNeedsInit{ false };
+
 	void CacheLookAtBones();
 
 	void UpdateMotionCache(const VmdMotion* motion);
@@ -196,6 +205,10 @@ private:
 	void ApplyAudioReactive(double dt, bool isMotionActive);
 	void ApplyLipSync(float weight);
 	void ApplySway(float phase, float strength, float motionScale);
+	void ApplyPoseTransition(double dtSeconds);
+	void BeginPoseTransitionFromLastPose();
+	double ComputeAdaptiveTransitionDuration(const BonePose& from, const BonePose& to) const;
+	float EvaluateTransitionAlpha(float t) const;
 
 	bool m_audioReactiveEnabled{ false };
 	AudioReactiveState m_audioState{};
