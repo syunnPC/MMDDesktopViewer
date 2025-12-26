@@ -2,7 +2,7 @@
 
 #include <windows.h>
 #include <functional>
-#include <wrl.h>
+#include <winrt/base.h>
 
 struct ID2D1Factory;
 struct ID2D1DCRenderTarget;
@@ -105,10 +105,10 @@ private:
 
 	bool m_gizmoVisible{ false };
 
-	Microsoft::WRL::ComPtr<ID2D1Factory> m_d2dFactory;
-	Microsoft::WRL::ComPtr<ID2D1DCRenderTarget> m_gizmoRt;
-	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_gizmoBrushFill;
-	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_gizmoBrushStroke;
+	winrt::com_ptr<ID2D1Factory> m_d2dFactory;
+	winrt::com_ptr<ID2D1DCRenderTarget> m_gizmoRt;
+	winrt::com_ptr<ID2D1SolidColorBrush> m_gizmoBrushFill;
+	winrt::com_ptr<ID2D1SolidColorBrush> m_gizmoBrushStroke;
 
 	HDC m_gizmoDc{ nullptr };
 	HBITMAP m_gizmoBmp{ nullptr };

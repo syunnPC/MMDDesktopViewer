@@ -172,7 +172,7 @@ void WindowManager::EnsureGizmoD2D()
 
 	if (!m_d2dFactory)
 	{
-		HRESULT hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, m_d2dFactory.GetAddressOf());
+		HRESULT hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, m_d2dFactory.put());
 		if (FAILED(hr))
 		{
 			throw std::runtime_error("D2D1CreateFactory failed.");
@@ -221,16 +221,16 @@ void WindowManager::EnsureGizmoD2D()
 
 		m_gizmoRt->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
-		m_gizmoRt->CreateSolidColorBrush(D2D1::ColorF(0.08f, 0.08f, 0.08f, 0.6f), m_gizmoBrushFill.GetAddressOf());
-		m_gizmoRt->CreateSolidColorBrush(D2D1::ColorF(0.85f, 0.85f, 0.85f, 0.9f), m_gizmoBrushStroke.GetAddressOf());
+		m_gizmoRt->CreateSolidColorBrush(D2D1::ColorF(0.08f, 0.08f, 0.08f, 0.6f), m_gizmoBrushFill.put());
+		m_gizmoRt->CreateSolidColorBrush(D2D1::ColorF(0.85f, 0.85f, 0.85f, 0.9f), m_gizmoBrushStroke.put());
 	}
 }
 
 void WindowManager::DiscardGizmoD2D()
 {
-	m_gizmoRt.Reset();
-	m_gizmoBrushFill.Reset();
-	m_gizmoBrushStroke.Reset();
+	m_gizmoRt = nullptr;
+	m_gizmoBrushFill = nullptr;
+	m_gizmoBrushStroke = nullptr;
 }
 
 void WindowManager::RenderGizmo()

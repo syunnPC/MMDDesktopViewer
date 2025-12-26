@@ -3,34 +3,34 @@
 #include "DebugUtil.hpp"
 #include <windows.h>
 #include <wincodec.h>
-#include <wrl.h>
+#include <winrt/base.h>
 #include <stdexcept>
 
 #pragma comment(lib, "windowscodecs.lib")
 
-using Microsoft::WRL::ComPtr;
+using winrt::com_ptr;
 
 namespace WicTexture
 {
 
 	WicImage LoadRgba(const std::filesystem::path& path)
 	{
-		ComPtr<IWICImagingFactory> factory;
+		com_ptr<IWICImagingFactory> factory;
 		HRESULT hr = CoCreateInstance(
 			CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-			IID_PPV_ARGS(&factory)
+			IID_PPV_ARGS(factory.put())
 		);
 		DX_CALL(hr);
 
-		ComPtr<IWICBitmapDecoder> decoder;
+		com_ptr<IWICBitmapDecoder> decoder;
 		hr = factory->CreateDecoderFromFilename(
 			path.c_str(), nullptr, GENERIC_READ,
-			WICDecodeMetadataCacheOnLoad, &decoder
+			WICDecodeMetadataCacheOnLoad, decoder.put()
 		);
 		DX_CALL(hr);
 
-		ComPtr<IWICBitmapFrameDecode> frame;
-		hr = decoder->GetFrame(0, &frame);
+		com_ptr<IWICBitmapFrameDecode> frame;
+		hr = decoder->GetFrame(0, frame.put());
 		DX_CALL(hr);
 
 		UINT w = 0, h = 0;
@@ -38,12 +38,12 @@ namespace WicTexture
 		DX_CALL(hr);
 		if (w == 0 || h == 0) throw std::runtime_error("WIC GetSize failed.");
 
-		ComPtr<IWICFormatConverter> converter;
-		hr = factory->CreateFormatConverter(&converter);
+		com_ptr<IWICFormatConverter> converter;
+		hr = factory->CreateFormatConverter(converter.put());
 		DX_CALL(hr);
 
 		hr = converter->Initialize(
-			frame.Get(),
+			frame.get(),
 			GUID_WICPixelFormat32bppRGBA,
 			WICBitmapDitherTypeNone,
 			nullptr, 0.0,

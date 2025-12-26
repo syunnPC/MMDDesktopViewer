@@ -13,6 +13,7 @@
 #define __D3DX12_H__
 
 #include "d3d12.h"
+#include <winrt/base.h>
 
 #if defined( __cplusplus )
 
@@ -2785,7 +2786,6 @@ inline bool operator==(const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC& a, const D3D1
 #include <vector>
 #include <string>
 #include <memory>
-#include <wrl/client.h>
 
 //------------------------------------------------------------------------------------------------
 class CD3DX12_STATE_OBJECT_DESC
@@ -3110,7 +3110,7 @@ private:
     }
     void* Data() { return &m_Desc; }
     D3D12_EXISTING_COLLECTION_DESC m_Desc;
-    Microsoft::WRL::ComPtr<ID3D12StateObject> m_CollectionRef;
+    winrt::com_ptr<ID3D12StateObject> m_CollectionRef;
     CD3DX12_STATE_OBJECT_DESC::StringContainer m_Strings;
     std::vector<D3D12_EXPORT_DESC> m_Exports;
 };
@@ -3381,15 +3381,15 @@ public:
         return D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE;
     }
     operator const D3D12_STATE_SUBOBJECT& () const { return *m_pSubobject; }
-    operator ID3D12RootSignature* () const { return m_pRootSig.Get(); }
+    operator ID3D12RootSignature* () const { return m_pRootSig.get(); }
 private:
     void Init()
     {
         SUBOBJECT_HELPER_BASE::Init();
         m_pRootSig = nullptr;
     }
-    void* Data() { return m_pRootSig.GetAddressOf(); }
-    Microsoft::WRL::ComPtr<ID3D12RootSignature> m_pRootSig;
+    void* Data() { return m_pRootSig.put(); }
+    winrt::com_ptr<ID3D12RootSignature> m_pRootSig;
 };
 
 //------------------------------------------------------------------------------------------------
@@ -3415,15 +3415,15 @@ public:
         return D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE;
     }
     operator const D3D12_STATE_SUBOBJECT& () const { return *m_pSubobject; }
-    operator ID3D12RootSignature* () const { return m_pRootSig.Get(); }
+    operator ID3D12RootSignature* () const { return m_pRootSig.get(); }
 private:
     void Init()
     {
         SUBOBJECT_HELPER_BASE::Init();
         m_pRootSig = nullptr;
     }
-    void* Data() { return m_pRootSig.GetAddressOf(); }
-    Microsoft::WRL::ComPtr<ID3D12RootSignature> m_pRootSig;
+    void* Data() { return m_pRootSig.put(); }
+    winrt::com_ptr<ID3D12RootSignature> m_pRootSig;
 };
 
 //------------------------------------------------------------------------------------------------
@@ -3499,5 +3499,3 @@ private:
 #endif // defined( __cplusplus )
 
 #endif //__D3DX12_H__
-
-

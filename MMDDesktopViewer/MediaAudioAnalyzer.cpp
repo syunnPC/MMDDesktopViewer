@@ -27,7 +27,7 @@
 #pragma comment(lib, "Mmdevapi.lib")
 #pragma comment(lib, "mincore.lib")
 
-using Microsoft::WRL::ComPtr;
+using winrt::com_ptr;
 
 namespace
 {
@@ -424,16 +424,16 @@ std::optional<uint32_t> MediaAudioAnalyzer::ResolveProcessId(const std::wstring&
 {
 	if (aumid.empty()) return std::nullopt;
 
-	ComPtr<IMMDeviceEnumerator> enumerator;
-	HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+	com_ptr<IMMDeviceEnumerator> enumerator;
+	HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(enumerator.put()));
 	if (FAILED(hr))
 	{
 		DebugHr(L"CoCreateInstance(MMDeviceEnumerator)", hr);
 		return std::nullopt;
 	}
 
-	ComPtr<IMMDeviceCollection> devices;
-	hr = enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &devices);
+	com_ptr<IMMDeviceCollection> devices;
+	hr = enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, devices.put());
 	if (FAILED(hr) || !devices)
 	{
 		DebugHr(L"EnumAudioEndpoints(eRender)", hr);
@@ -450,15 +450,15 @@ std::optional<uint32_t> MediaAudioAnalyzer::ResolveProcessId(const std::wstring&
 
 	for (UINT di = 0; di < count; ++di)
 	{
-		ComPtr<IMMDevice> device;
-		if (FAILED(devices->Item(di, &device)) || !device) continue;
+		com_ptr<IMMDevice> device;
+		if (FAILED(devices->Item(di, device.put())) || !device) continue;
 
-		ComPtr<IAudioSessionManager2> sessionManager;
-		hr = device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(sessionManager.GetAddressOf()));
+		com_ptr<IAudioSessionManager2> sessionManager;
+		hr = device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(sessionManager.put()));
 		if (FAILED(hr) || !sessionManager) continue;
 
-		ComPtr<IAudioSessionEnumerator> sessionEnum;
-		hr = sessionManager->GetSessionEnumerator(&sessionEnum);
+		com_ptr<IAudioSessionEnumerator> sessionEnum;
+		hr = sessionManager->GetSessionEnumerator(sessionEnum.put());
 		if (FAILED(hr) || !sessionEnum) continue;
 
 		int sessionCount = 0;
@@ -467,11 +467,11 @@ std::optional<uint32_t> MediaAudioAnalyzer::ResolveProcessId(const std::wstring&
 
 		for (int i = 0; i < sessionCount; ++i)
 		{
-			ComPtr<IAudioSessionControl> control;
-			if (FAILED(sessionEnum->GetSession(i, &control)) || !control) continue;
+			com_ptr<IAudioSessionControl> control;
+			if (FAILED(sessionEnum->GetSession(i, control.put())) || !control) continue;
 
-			ComPtr<IAudioSessionControl2> control2;
-			if (FAILED(control.As(&control2)) || !control2) continue;
+			com_ptr<IAudioSessionControl2> control2;
+			if (FAILED(control->QueryInterface(__uuidof(IAudioSessionControl2), control2.put_void())) || !control2) continue;
 
 			DWORD pid = 0;
 			if (FAILED(control2->GetProcessId(&pid)) || pid == 0) continue;
@@ -563,16 +563,16 @@ bool MediaAudioAnalyzer::StartProcessLoopback(uint32_t pid)
 	{
 		HANDLE eventHandle{ nullptr };
 		HRESULT hr{ E_FAIL };
-		Microsoft::WRL::ComPtr<IAudioClient> client;
+		winrt::com_ptr<IAudioClient> client;
 
 		HRESULT STDMETHODCALLTYPE ActivateCompleted(IActivateAudioInterfaceAsyncOperation* operation) noexcept override
 		{
 			hr = E_FAIL;
-			Microsoft::WRL::ComPtr<IAudioClient> audioClient;
+			winrt::com_ptr<IAudioClient> audioClient;
 			if (operation)
 			{
 				HRESULT result = E_FAIL;
-				operation->GetActivateResult(&result, reinterpret_cast<IUnknown**>(audioClient.GetAddressOf()));
+				operation->GetActivateResult(&result, reinterpret_cast<IUnknown**>(audioClient.put()));
 				hr = result;
 				if (SUCCEEDED(result))
 				{
@@ -588,7 +588,7 @@ bool MediaAudioAnalyzer::StartProcessLoopback(uint32_t pid)
 	handler->eventHandle = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 	if (!handler->eventHandle) return false;
 
-	Microsoft::WRL::ComPtr<IActivateAudioInterfaceAsyncOperation> asyncOp;
+	winrt::com_ptr<IActivateAudioInterfaceAsyncOperation> asyncOp;
 	HRESULT hr = ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, __uuidof(IAudioClient), &var, handler.get(), &asyncOp);
 	if (FAILED(hr))
 	{
@@ -656,7 +656,7 @@ bool MediaAudioAnalyzer::StartProcessLoopback(uint32_t pid)
 		return false;
 	}
 
-	hr = m_audioClient->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void**>(m_captureClient.ReleaseAndGetAddressOf()));
+	hr = m_audioClient->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void**>(m_captureClient.put()));
 	if (FAILED(hr) || !m_captureClient)
 	{
 		DebugHr(L"IAudioClient::GetService(IAudioCaptureClient, ProcessLoopback)", hr);
@@ -681,15 +681,15 @@ bool MediaAudioAnalyzer::StartSystemLoopback()
 {
 	StopCapture();
 
-	ComPtr<IMMDeviceEnumerator> enumerator;
-	HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+	com_ptr<IMMDeviceEnumerator> enumerator;
+	HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(enumerator.put()));
 	if (FAILED(hr))
 	{
 		DebugHr(L"CoCreateInstance(MMDeviceEnumerator)", hr);
 		return false;
 	}
 
-	ComPtr<IMMDevice> device;
+	com_ptr<IMMDevice> device;
 	hr = enumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, &device);
 	if (FAILED(hr))
 	{
@@ -704,7 +704,7 @@ bool MediaAudioAnalyzer::StartSystemLoopback()
 
 	m_captureDevice = device;
 
-	hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(m_audioClient.ReleaseAndGetAddressOf()));
+	hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(m_audioClient.put()));
 	if (FAILED(hr) || !m_audioClient)
 	{
 		DebugHr(L"IMMDevice::Activate(IAudioClient)", hr);
@@ -758,7 +758,7 @@ bool MediaAudioAnalyzer::StartSystemLoopback()
 		return false;
 	}
 
-	hr = m_audioClient->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void**>(m_captureClient.ReleaseAndGetAddressOf()));
+	hr = m_audioClient->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void**>(m_captureClient.put()));
 	if (FAILED(hr) || !m_captureClient)
 	{
 		DebugHr(L"IAudioClient::GetService(IAudioCaptureClient)", hr);
@@ -785,9 +785,9 @@ void MediaAudioAnalyzer::StopCapture()
 	{
 		m_audioClient->Stop();
 	}
-	m_captureClient.Reset();
-	m_audioClient.Reset();
-	m_captureDevice.Reset();
+	m_captureClient = nullptr;
+	m_audioClient = nullptr;
+	m_captureDevice = nullptr;
 	if (m_mixFormat)
 	{
 		CoTaskMemFree(m_mixFormat);

@@ -8,8 +8,8 @@
 #include <thread>
 #include <vector>
 #include <memory>
-#include <wrl/client.h>
 #include <mmeapi.h>
+#include <winrt/base.h>
 #include "AudioReactiveState.hpp"
 
 struct IAudioClient;
@@ -101,12 +101,12 @@ private:
 
 	std::jthread m_worker;
 
-	Microsoft::WRL::ComPtr<IMMDeviceEnumerator> m_deviceEnumerator;
+	winrt::com_ptr<IMMDeviceEnumerator> m_deviceEnumerator;
 	std::unique_ptr<GsmtcCache> m_gsmtc;
 
-	Microsoft::WRL::ComPtr<IAudioClient> m_audioClient;
-	Microsoft::WRL::ComPtr<IAudioCaptureClient> m_captureClient;
-	Microsoft::WRL::ComPtr<IMMDevice> m_captureDevice;
+	winrt::com_ptr<IAudioClient> m_audioClient;
+	winrt::com_ptr<IAudioCaptureClient> m_captureClient;
+	winrt::com_ptr<IMMDevice> m_captureDevice;
 	WAVEFORMATEX* m_mixFormat{ nullptr };
 	HANDLE m_captureEvent{ nullptr };
 	CaptureTarget m_currentTarget{};

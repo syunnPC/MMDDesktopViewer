@@ -3,7 +3,7 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <dcomp.h>
-#include <wrl.h>
+#include <winrt/base.h>
 
 #include <memory>
 #include <vector>
@@ -52,7 +52,7 @@ public:
 	void AddModelOffsetPixels(float dxPixels, float dyPixels);
 	bool IsPointOnModel(const POINT& clientPoint);
 
-	// 3DãÛä‘(Model Local)ÇÃç¿ïWÇÉXÉNÉäÅ[Éì(ÉNÉâÉCÉAÉìÉg)ç¿ïWÇ…ïœä∑Ç∑ÇÈ
+	// 3DÁ©∫Èñì(Model Local)„ÅÆÂ∫ßÊ®ô„Çí„Çπ„ÇØ„É™„Éº„É≥(„ÇØ„É©„Ç§„Ç¢„É≥„Éà)Â∫ßÊ®ô„Å´Â§âÊèõ„Åô„Çã
 	DirectX::XMFLOAT3 ProjectToScreen(const DirectX::XMFLOAT3& localPos) const;
 
 	bool TryGetCachedMatrices(DirectX::XMFLOAT4X4& outModel,
@@ -86,22 +86,22 @@ private:
     GpuResourceManager m_gpuResources;
     PmxModelDrawer m_pmxDrawer;
 
-    Microsoft::WRL::ComPtr<IDXGISwapChain1> m_swapChain1;
-    Microsoft::WRL::ComPtr<IDXGISwapChain3> m_swapChain;
+    winrt::com_ptr<IDXGISwapChain1> m_swapChain1;
+    winrt::com_ptr<IDXGISwapChain3> m_swapChain;
 
-    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_alloc[FrameCount];
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_cmdList;
-    Microsoft::WRL::ComPtr<ID3D12Fence> m_fence;
+    winrt::com_ptr<ID3D12CommandAllocator> m_alloc[FrameCount];
+    winrt::com_ptr<ID3D12GraphicsCommandList> m_cmdList;
+    winrt::com_ptr<ID3D12Fence> m_fence;
     std::atomic<UINT64> m_fenceValue{};
     HANDLE m_fenceEvent{};
 
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
+    winrt::com_ptr<ID3D12DescriptorHeap> m_rtvHeap;
     UINT m_rtvDescriptorSize{};
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_renderTargets[FrameCount];
+    winrt::com_ptr<ID3D12Resource> m_renderTargets[FrameCount];
 
-    Microsoft::WRL::ComPtr<IDCompositionDevice> m_dcompDevice;
-    Microsoft::WRL::ComPtr<IDCompositionTarget> m_dcompTarget;
-    Microsoft::WRL::ComPtr<IDCompositionVisual> m_dcompVisual;
+    winrt::com_ptr<IDCompositionDevice> m_dcompDevice;
+    winrt::com_ptr<IDCompositionTarget> m_dcompTarget;
+    winrt::com_ptr<IDCompositionVisual> m_dcompVisual;
 
     UINT m_width{};
     UINT m_height{};
@@ -151,14 +151,14 @@ private:
         float globalSaturation;
     };
 
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_sceneCb[FrameCount];
+    winrt::com_ptr<ID3D12Resource> m_sceneCb[FrameCount];
     SceneCB* m_sceneCbMapped[FrameCount] = {};
 
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_boneCb[FrameCount];
+    winrt::com_ptr<ID3D12Resource> m_boneCb[FrameCount];
     PmxModelDrawer::BoneCB* m_boneCbMapped[FrameCount] = {};
 
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_depth;
+    winrt::com_ptr<ID3D12DescriptorHeap> m_dsvHeap;
+    winrt::com_ptr<ID3D12Resource> m_depth;
     D3D12_CPU_DESCRIPTOR_HANDLE m_dsvHandle{};
 
     void CreateDepthBuffer();
@@ -172,8 +172,8 @@ private:
     UINT m_msaaSampleCount = 4;
     UINT m_msaaQuality = 0;
 
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_msaaColor;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_msaaRtvHeap;
+    winrt::com_ptr<ID3D12Resource> m_msaaColor;
+    winrt::com_ptr<ID3D12DescriptorHeap> m_msaaRtvHeap;
     D3D12_CPU_DESCRIPTOR_HANDLE m_msaaRtvHandle{};
 
     void UpdateMsaaSettings();
@@ -184,12 +184,12 @@ private:
 
     void SelectMaximumMsaa();
 
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_intermediateTex;
+    winrt::com_ptr<ID3D12Resource> m_intermediateTex;
 
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_intermediateRtvHeap;
+    winrt::com_ptr<ID3D12DescriptorHeap> m_intermediateRtvHeap;
     D3D12_CPU_DESCRIPTOR_HANDLE m_intermediateRtvHandle{};
 
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_intermediateSrvHeap;
+    winrt::com_ptr<ID3D12DescriptorHeap> m_intermediateSrvHeap;
     D3D12_CPU_DESCRIPTOR_HANDLE m_intermediateSrvCpuHandle{};
     D3D12_GPU_DESCRIPTOR_HANDLE m_intermediateSrvGpuHandle{};
 

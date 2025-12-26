@@ -49,12 +49,12 @@ void RenderPipelineManager::CreatePmxRootSignature()
 		1, &samp,
 		D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
-	Microsoft::WRL::ComPtr<ID3DBlob> sigBlob;
-	Microsoft::WRL::ComPtr<ID3DBlob> errBlob;
+	winrt::com_ptr<ID3DBlob> sigBlob;
+	winrt::com_ptr<ID3DBlob> errBlob;
 
 	HRESULT hr = D3D12SerializeRootSignature(
 		&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1,
-		&sigBlob, &errBlob);
+		sigBlob.put(), errBlob.put());
 
 	if (FAILED(hr))
 	{
@@ -67,7 +67,7 @@ void RenderPipelineManager::CreatePmxRootSignature()
 
 	DX_CALL(m_ctx->Device()->CreateRootSignature(
 		0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(),
-		IID_PPV_ARGS(&m_pmxRootSig)));
+		IID_PPV_ARGS(m_pmxRootSig.put())));
 }
 
 void RenderPipelineManager::CreatePmxPipeline(UINT msaaSampleCount, UINT msaaQuality)
@@ -83,21 +83,21 @@ void RenderPipelineManager::CreatePmxPipeline(UINT msaaSampleCount, UINT msaaQua
 	std::wstring pscompiled = base / L"Shaders\\Compiled_PMX_PS.cso";
 	std::wstring vscompiled = base / L"Shaders\\Compiled_PMX_VS.cso";
 
-	Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob, errBlob;
+	winrt::com_ptr<ID3DBlob> vsBlob, psBlob, errBlob;
 
 	HRESULT hr;
 
 	if (std::filesystem::exists(vscompiled))
 	{
-		hr = D3DReadFileToBlob(vscompiled.c_str(), &vsBlob);
+		hr = D3DReadFileToBlob(vscompiled.c_str(), vsBlob.put());
 		if (FAILED(hr))
 		{
-			hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vsBlob, &errBlob);
+			hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, vsBlob.put(), errBlob.put());
 		}
 	}
 	else
 	{
-		hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vsBlob, &errBlob);
+		hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, vsBlob.put(), errBlob.put());
 	}
 
 	if (FAILED(hr))
@@ -108,20 +108,20 @@ void RenderPipelineManager::CreatePmxPipeline(UINT msaaSampleCount, UINT msaaQua
 
 	if (!std::filesystem::exists(vscompiled))
 	{
-		D3DWriteBlobToFile(vsBlob.Get(), vscompiled.c_str(), FALSE);
+		D3DWriteBlobToFile(vsBlob.get(), vscompiled.c_str(), FALSE);
 	}
 
 	if (std::filesystem::exists(pscompiled))
 	{
-		hr = D3DReadFileToBlob(pscompiled.c_str(), &psBlob);
+		hr = D3DReadFileToBlob(pscompiled.c_str(), psBlob.put());
 		if (FAILED(hr))
 		{
-			hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, &psBlob, &errBlob);
+			hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, psBlob.put(), errBlob.put());
 		}
 	}
 	else
 	{
-		hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, &psBlob, &errBlob);
+		hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, psBlob.put(), errBlob.put());
 	}
 
 	if (FAILED(hr))
@@ -132,7 +132,7 @@ void RenderPipelineManager::CreatePmxPipeline(UINT msaaSampleCount, UINT msaaQua
 
 	if (!std::filesystem::exists(pscompiled))
 	{
-		D3DWriteBlobToFile(psBlob.Get(), pscompiled.c_str(), FALSE);
+		D3DWriteBlobToFile(psBlob.get(), pscompiled.c_str(), FALSE);
 	}
 
 	D3D12_INPUT_ELEMENT_DESC layout[] = {
@@ -149,7 +149,7 @@ void RenderPipelineManager::CreatePmxPipeline(UINT msaaSampleCount, UINT msaaQua
 
 	auto MakeBaseDesc = [&]() {
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
-		pso.pRootSignature = m_pmxRootSig.Get();
+		pso.pRootSignature = m_pmxRootSig.get();
 		pso.VS = { vsBlob->GetBufferPointer(), vsBlob->GetBufferSize() };
 		pso.PS = { psBlob->GetBufferPointer(), psBlob->GetBufferSize() };
 		pso.InputLayout = { layout, _countof(layout) };
@@ -181,12 +181,12 @@ void RenderPipelineManager::CreatePmxPipeline(UINT msaaSampleCount, UINT msaaQua
 	{
 		auto pso = MakeBaseDesc();
 		pso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-		DX_CALL(m_ctx->Device()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&m_pmxPsoOpaque)));
+		DX_CALL(m_ctx->Device()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(m_pmxPsoOpaque.put())));
 	}
 	{
 		auto pso = MakeBaseDesc();
 		pso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-		DX_CALL(m_ctx->Device()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&m_pmxPsoTrans)));
+		DX_CALL(m_ctx->Device()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(m_pmxPsoTrans.put())));
 	}
 }
 
@@ -203,21 +203,21 @@ void RenderPipelineManager::CreateEdgePipeline(UINT msaaSampleCount, UINT msaaQu
 	std::wstring pscompiled = base / L"Shaders\\Compiled_Edge_PS.cso";
 	std::wstring vscompiled = base / L"Shaders\\Compiled_Edge_VS.cso";
 
-	Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob, errBlob;
+	winrt::com_ptr<ID3DBlob> vsBlob, psBlob, errBlob;
 
 	HRESULT hr;
 
 	if (std::filesystem::exists(vscompiled))
 	{
-		hr = D3DReadFileToBlob(vscompiled.c_str(), &vsBlob);
+		hr = D3DReadFileToBlob(vscompiled.c_str(), vsBlob.put());
 		if (FAILED(hr))
 		{
-			hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vsBlob, &errBlob);
+			hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, vsBlob.put(), errBlob.put());
 		}
 	}
 	else
 	{
-		hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vsBlob, &errBlob);
+		hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, vsBlob.put(), errBlob.put());
 	}
 
 	if (FAILED(hr))
@@ -228,20 +228,20 @@ void RenderPipelineManager::CreateEdgePipeline(UINT msaaSampleCount, UINT msaaQu
 
 	if (!std::filesystem::exists(vscompiled))
 	{
-		D3DWriteBlobToFile(vsBlob.Get(), vscompiled.c_str(), FALSE);
+		D3DWriteBlobToFile(vsBlob.get(), vscompiled.c_str(), FALSE);
 	}
 
 	if (std::filesystem::exists(pscompiled))
 	{
-		hr = D3DReadFileToBlob(pscompiled.c_str(), &psBlob);
+		hr = D3DReadFileToBlob(pscompiled.c_str(), psBlob.put());
 		if (FAILED(hr))
 		{
-			hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &psBlob, &errBlob);
+			hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, psBlob.put(), errBlob.put());
 		}
 	}
 	else
 	{
-		hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &psBlob, &errBlob);
+		hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, psBlob.put(), errBlob.put());
 	}
 
 	if (FAILED(hr))
@@ -252,7 +252,7 @@ void RenderPipelineManager::CreateEdgePipeline(UINT msaaSampleCount, UINT msaaQu
 
 	if (!std::filesystem::exists(pscompiled))
 	{
-		D3DWriteBlobToFile(psBlob.Get(), pscompiled.c_str(), FALSE);
+		D3DWriteBlobToFile(psBlob.get(), pscompiled.c_str(), FALSE);
 	}
 
 	D3D12_INPUT_ELEMENT_DESC layout[] = {
@@ -268,7 +268,7 @@ void RenderPipelineManager::CreateEdgePipeline(UINT msaaSampleCount, UINT msaaQu
 	};
 
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
-	pso.pRootSignature = m_pmxRootSig.Get();
+	pso.pRootSignature = m_pmxRootSig.get();
 	pso.VS = { vsBlob->GetBufferPointer(), vsBlob->GetBufferSize() };
 	pso.PS = { psBlob->GetBufferPointer(), psBlob->GetBufferSize() };
 	pso.InputLayout = { layout, _countof(layout) };
@@ -295,7 +295,7 @@ void RenderPipelineManager::CreateEdgePipeline(UINT msaaSampleCount, UINT msaaQu
 	pso.SampleDesc.Quality = msaaQuality;
 	pso.SampleMask = UINT_MAX;
 
-	DX_CALL(m_ctx->Device()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&m_edgePso)));
+	DX_CALL(m_ctx->Device()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(m_edgePso.put())));
 }
 
 void RenderPipelineManager::CreateFxaaPipeline()
@@ -318,9 +318,9 @@ void RenderPipelineManager::CreateFxaaPipeline()
 	CD3DX12_ROOT_SIGNATURE_DESC rsDesc;
 	rsDesc.Init(2, params, 1, &samp, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
-	Microsoft::WRL::ComPtr<ID3DBlob> sigBlob, errBlob;
-	DX_CALL(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob));
-	DX_CALL(m_ctx->Device()->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&m_fxaaRootSig)));
+	winrt::com_ptr<ID3DBlob> sigBlob, errBlob;
+	DX_CALL(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, sigBlob.put(), errBlob.put()));
+	DX_CALL(m_ctx->Device()->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(m_fxaaRootSig.put())));
 
 	auto base = FileUtil::GetExecutableDir();
 	std::wstring psname = base / L"Shaders\\FXAA_PS.hlsl";
@@ -328,60 +328,60 @@ void RenderPipelineManager::CreateFxaaPipeline()
 	std::wstring pscompiled = base / L"Shaders\\Compiled_FXAA_PS.cso";
 	std::wstring vscompiled = base / L"Shaders\\Compiled_FXAA_VS.cso";
 
-	Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob, err;
+	winrt::com_ptr<ID3DBlob> vsBlob, psBlob, err;
 
 	HRESULT hr;
 
 	if (std::filesystem::exists(vscompiled))
 	{
-		hr = D3DReadFileToBlob(vscompiled.c_str(), &vsBlob);
+		hr = D3DReadFileToBlob(vscompiled.c_str(), vsBlob.put());
 		if (FAILED(hr))
 		{
-			hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vsBlob, &err);
+			hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, vsBlob.put(), err.put());
 		}
 	}
 	else
 	{
-		hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vsBlob, &err);
+		hr = D3DCompileFromFile(vsname.c_str(), nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, vsBlob.put(), err.put());
 	}
 
 	if (FAILED(hr))
 	{
-		if (errBlob) OutputDebugStringA(static_cast<char*>(err->GetBufferPointer()));
+		if (err) OutputDebugStringA(static_cast<char*>(err->GetBufferPointer()));
 		ThrowIfFailedEx(hr, "D3DCompile FXAA VS", FILENAME, __LINE__);
 	}
 
 	if (!std::filesystem::exists(vscompiled))
 	{
-		D3DWriteBlobToFile(vsBlob.Get(), vscompiled.c_str(), FALSE);
+		D3DWriteBlobToFile(vsBlob.get(), vscompiled.c_str(), FALSE);
 	}
 
 	if (std::filesystem::exists(pscompiled))
 	{
-		hr = D3DReadFileToBlob(pscompiled.c_str(), &psBlob);
+		hr = D3DReadFileToBlob(pscompiled.c_str(), psBlob.put());
 		if (FAILED(hr))
 		{
-			hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &psBlob, &err);
+			hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, psBlob.put(), err.put());
 		}
 	}
 	else
 	{
-		hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &psBlob, &err);
+		hr = D3DCompileFromFile(psname.c_str(), nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, psBlob.put(), err.put());
 	}
 
 	if (FAILED(hr))
 	{
-		if (errBlob) OutputDebugStringA(static_cast<char*>(err->GetBufferPointer()));
+		if (err) OutputDebugStringA(static_cast<char*>(err->GetBufferPointer()));
 		ThrowIfFailedEx(hr, "D3DCompile FXAA PS", FILENAME, __LINE__);
 	}
 
 	if (!std::filesystem::exists(pscompiled))
 	{
-		D3DWriteBlobToFile(psBlob.Get(), pscompiled.c_str(), FALSE);
+		D3DWriteBlobToFile(psBlob.get(), pscompiled.c_str(), FALSE);
 	}
 
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
-	pso.pRootSignature = m_fxaaRootSig.Get();
+	pso.pRootSignature = m_fxaaRootSig.get();
 	pso.VS = { vsBlob->GetBufferPointer(), vsBlob->GetBufferSize() };
 	pso.PS = { psBlob->GetBufferPointer(), psBlob->GetBufferSize() };
 	pso.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
@@ -395,5 +395,5 @@ void RenderPipelineManager::CreateFxaaPipeline()
 	pso.RTVFormats[0] = DXGI_FORMAT_R10G10B10A2_UNORM;
 	pso.SampleDesc.Count = 1;
 
-	DX_CALL(m_ctx->Device()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&m_fxaaPso)));
+	DX_CALL(m_ctx->Device()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(m_fxaaPso.put())));
 }

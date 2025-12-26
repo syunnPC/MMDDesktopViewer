@@ -1,7 +1,7 @@
 #pragma once
 
 #include <d3d12.h>
-#include <wrl.h>
+#include <winrt/base.h>
 
 #include <cstdint>
 #include <filesystem>
@@ -17,7 +17,7 @@ class GpuResourceManager
 public:
 	struct GpuTexture
 	{
-		Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+		winrt::com_ptr<ID3D12Resource> resource;
 		uint32_t srvIndex{};
 		uint32_t width{};
 		uint32_t height{};
@@ -33,7 +33,7 @@ public:
 
 	ID3D12DescriptorHeap* GetSrvHeap() const
 	{
-		return m_srvHeap.Get();
+		return m_srvHeap.get();
 	}
 	D3D12_CPU_DESCRIPTOR_HANDLE GetSrvCpuHandle(uint32_t index) const;
 	D3D12_GPU_DESCRIPTOR_HANDLE GetSrvGpuHandle(uint32_t index) const;
@@ -64,10 +64,10 @@ public:
 	}
 
 private:
-	Microsoft::WRL::ComPtr<ID3D12Resource> CreateTexture2DFromRgba(
+	winrt::com_ptr<ID3D12Resource> CreateTexture2DFromRgba(
 		const uint8_t* rgba, uint32_t width, uint32_t height);
 
-	Microsoft::WRL::ComPtr<ID3D12Resource> CreateTexture2DFromRgbaMips(
+	winrt::com_ptr<ID3D12Resource> CreateTexture2DFromRgbaMips(
 		uint32_t width, uint32_t height,
 		const std::vector<std::vector<uint8_t>>& mips);
 
@@ -80,20 +80,20 @@ private:
 	std::function<void()> m_waitForGpu;
 	UINT m_frameCount{};
 
-	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_srvHeap;
+	winrt::com_ptr<ID3D12DescriptorHeap> m_srvHeap;
 	UINT m_srvDescriptorSize{};
 
 	std::vector<GpuTexture> m_textures;
 	std::unordered_map<std::wstring, uint32_t> m_textureCache;
 
-	Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_uploadAlloc;
-	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_uploadCmdList;
+	winrt::com_ptr<ID3D12CommandAllocator> m_uploadAlloc;
+	winrt::com_ptr<ID3D12GraphicsCommandList> m_uploadCmdList;
 
 	uint32_t m_nextSrvIndex = 0;
 	uint32_t m_defaultWhiteSrv = 0;
 	uint32_t m_defaultToonSrv = 0;
 
-	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_readbackBuffers;
+	std::vector<winrt::com_ptr<ID3D12Resource>> m_readbackBuffers;
 	std::vector<void*> m_readbackMapped;
 	D3D12_PLACED_SUBRESOURCE_FOOTPRINT m_readbackFootprint{};
 	UINT64 m_readbackTotalSize{};
