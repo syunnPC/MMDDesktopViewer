@@ -13,6 +13,13 @@ BinaryReader::BinaryReader(const std::filesystem::path& path)
 
 	if (size < 0) throw std::runtime_error("Invalid file size.");
 
+#if defined _M_IX86 && !defined X86_NO_SAFE_MEMORY_SIZE
+	if (size > 1 * 1024 * 1024 * 1024)
+	{
+		throw std::runtime_error("The model file is too large.");
+	}
+#endif
+
 	m_buf.resize(static_cast<size_t>(size));
 	if (!m_buf.empty())
 	{

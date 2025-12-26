@@ -5,10 +5,11 @@
 #include <stdexcept>
 #include <string>
 #include <algorithm>
+#include <atomic>
 
 namespace
 {
-	uint64_t g_revisionCounter = 1;
+	std::atomic<uint64_t> g_revisionCounter{ 1 };
 
 	void EnsureRemaining(BinaryReader& br, size_t bytes, const char* context)
 	{
