@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstring>
 #include <span>
+#include <numeric>
 
 #pragma comment(lib, "Mmdevapi.lib")
 #pragma comment(lib, "mincore.lib")
@@ -34,6 +35,15 @@ namespace
 	constexpr int kFftSize = 1024;
 	constexpr double kBeatMinIntervalSeconds = 0.25;
 	constexpr double kBeatEnergyThreshold = 1.35;
+	constexpr double kBeatMaxIntervalSeconds = 1.2;
+	constexpr double kBeatStrengthSmoothSeconds = 0.06;
+	constexpr double kFluxTriggerRatio = 0.22;
+	constexpr double kFluxThresholdFloor = 1e-5;
+	constexpr double kFluxAdaptiveDecaySeconds = 0.18;
+	constexpr double kFluxPeakDecaySeconds = 0.45;
+	constexpr double kMouthAttackSeconds = 0.012;
+	constexpr double kMouthReleaseSeconds = 0.10;
+	constexpr double kMouthSmoothingSeconds = 0.045;
 	// 音量に依存しない「無音判定」のための最小 RMS。
 	// ループバックでゼロ埋めされる環境ではこれより十分大きい。
 	constexpr double kMinSilenceGateRms = 5e-9;
@@ -1018,12 +1028,18 @@ void MediaAudioAnalyzer::AudioAnalyzer::Reset(double sampleRate, int channels)
 	m_noiseRms = 1e-9;
 	m_agcGain = 1.0;
 	m_lastHadAudio = false;
+	m_envelopeFast = 0.0;
+	m_envelopeSlow = 0.0;
+	m_fluxAdaptive = 0.0;
+	m_fluxPeak = 0.0;
+	m_recentBeatIntervals.clear();
 	m_fftBuffer.assign(kFftSize, 0.0f);
 	m_window.resize(kFftSize);
 	for (int i = 0; i < kFftSize; ++i)
 	{
 		m_window[i] = 0.5f * (1.0f - std::cos(2.0 * 3.141592653589793 * i / (kFftSize - 1)));
 	}
+	m_prevMagnitudes.assign(kFftSize / 2, 0.0);
 	m_fftWriteIndex = 0;
 }
 
@@ -1032,6 +1048,7 @@ void MediaAudioAnalyzer::AudioAnalyzer::Process(const float* samples, size_t fra
 	if (!samples || frames == 0 || channels == 0) return;
 
 	double energy = 0.0;
+	double peakAbs = 0.0;
 	for (size_t i = 0; i < frames; ++i)
 	{
 		double mono = 0.0;
@@ -1041,6 +1058,7 @@ void MediaAudioAnalyzer::AudioAnalyzer::Process(const float* samples, size_t fra
 		}
 		mono /= static_cast<double>(channels);
 		energy += mono * mono;
+		peakAbs = std::max(peakAbs, std::abs(mono));
 
 		m_fftBuffer[m_fftWriteIndex] = static_cast<float>(mono);
 		m_fftWriteIndex = (m_fftWriteIndex + 1) % kFftSize;
@@ -1048,6 +1066,7 @@ void MediaAudioAnalyzer::AudioAnalyzer::Process(const float* samples, size_t fra
 
 	energy /= static_cast<double>(frames);
 	const double rms = std::sqrt(std::max(0.0, energy));
+	const double frameDuration = static_cast<double>(frames) / std::max(sampleRate, 1.0);
 
 	// 無音判定（固定閾値ではなく、環境ノイズの移動平均に基づいて判定する）
 	const double gate = std::max(m_noiseRms * 4.0, kMinSilenceGateRms);
@@ -1077,40 +1096,79 @@ void MediaAudioAnalyzer::AudioAnalyzer::Process(const float* samples, size_t fra
 		m_agcGain = std::clamp(m_agcGain, 1.0, 200.0);
 	}
 
-	UpdateBeat(energy, timeSeconds);
-	UpdateSpectral();
+	const double flux = UpdateSpectral();
+	const double normFlux = flux / std::max(kFluxThresholdFloor, (m_fluxAdaptive + flux) * 0.5);
+	UpdateBeat(energy, normFlux, timeSeconds, frameDuration);
 
-	// AGC 後の RMS で口パクを駆動（音量に依存しにくい）
-	double mouthTarget = hasAudio ? (rms * m_agcGain * 4.0) : 0.0;
-	m_mouth = (m_mouth * 0.85) + (mouthTarget * 0.15);
+	// 口パクの駆動は、ピークと平均を使ったエンベロープフォロワーで安定させる。
+	const double attackCoef = std::exp(-frameDuration / kMouthAttackSeconds);
+	const double releaseCoef = std::exp(-frameDuration / kMouthReleaseSeconds);
+	const double smoothingCoef = std::exp(-frameDuration / kMouthSmoothingSeconds);
+
+	m_envelopeFast = hasAudio
+		? (m_envelopeFast * attackCoef) + (peakAbs * (1.0 - attackCoef))
+		: (m_envelopeFast * releaseCoef);
+
+	m_envelopeSlow = (m_envelopeSlow * 0.995) + (rms * 0.005);
+	const double envelopeDelta = std::max(0.0, m_envelopeFast - (m_envelopeSlow * 0.6));
+	const double compensated = envelopeDelta * m_agcGain;
+	const double perceptual = std::log1p(compensated * 10.0) / std::log(11.0);
+	const double mouthTarget = hasAudio ? perceptual : 0.0;
+
+	m_mouth = (m_mouth * smoothingCoef) + (mouthTarget * (1.0 - smoothingCoef));
 	m_mouth = std::clamp(m_mouth, 0.0, 1.0);
 }
 
-void MediaAudioAnalyzer::AudioAnalyzer::UpdateBeat(double energy, double timeSeconds)
+void MediaAudioAnalyzer::AudioAnalyzer::UpdateBeat(double energy, double normalizedFlux, double timeSeconds, double frameDuration)
 {
 	if (m_energyAvg <= 1e-12) return;
 
-	double ratio = energy / m_energyAvg;
-	double spectralBoost = std::clamp(m_bassEnergy * 0.15, 0.0, 0.5);
-	double strength = std::clamp((ratio - 1.0 + spectralBoost) * 1.25, 0.0, 1.0);
-	m_beatStrength = (m_beatStrength * 0.7) + (strength * 0.3);
+	// BPM 検知: スペクトルフラックスのピークを利用し、適応的なしきい値で安定化する。
+	const double fluxDecay = std::exp(-frameDuration / kFluxAdaptiveDecaySeconds);
+	const double peakDecay = std::exp(-frameDuration / kFluxPeakDecaySeconds);
 
-	if (ratio > kBeatEnergyThreshold && (timeSeconds - m_lastBeatTime) > kBeatMinIntervalSeconds)
+	m_fluxAdaptive = (m_fluxAdaptive * fluxDecay) + (normalizedFlux * (1.0 - fluxDecay));
+	const double fluxDelta = std::max(0.0, normalizedFlux - m_fluxAdaptive);
+	m_fluxPeak = (m_fluxPeak * peakDecay) + (fluxDelta * (1.0 - peakDecay));
+
+	const double ratio = energy / m_energyAvg;
+	const double spectralBoost = std::clamp(m_bassEnergy * 0.25, 0.0, 0.6);
+	const double dynamicStrength = std::clamp((ratio - 1.0) + (fluxDelta * 2.0) + spectralBoost, 0.0, 2.5);
+
+	const bool strongFlux = fluxDelta > (m_fluxPeak * 0.45) && normalizedFlux > kFluxTriggerRatio;
+	const bool energetic = ratio > kBeatEnergyThreshold;
+	const bool timeOk = (timeSeconds - m_lastBeatTime) > kBeatMinIntervalSeconds;
+	if (strongFlux && energetic && timeOk)
 	{
 		if (m_lastBeatTime > 0.0)
 		{
-			double interval = timeSeconds - m_lastBeatTime;
-			double bpm = 60.0 / interval;
-			if (bpm > 60.0 && bpm < 200.0)
+			const double interval = timeSeconds - m_lastBeatTime;
+			if (interval > 0.001)
 			{
-				m_bpm = (m_bpm * 0.7) + (bpm * 0.3);
+				const double bpm = 60.0 / interval;
+				if (bpm > 60.0 && bpm < 200.0 && interval < kBeatMaxIntervalSeconds)
+				{
+					if (m_recentBeatIntervals.size() >= 16)
+					{
+						m_recentBeatIntervals.pop_front();
+					}
+					m_recentBeatIntervals.push_back(interval);
+
+					double intervalSum = std::accumulate(m_recentBeatIntervals.begin(), m_recentBeatIntervals.end(), 0.0);
+					double intervalAvg = intervalSum / static_cast<double>(m_recentBeatIntervals.size());
+					const double refinedBpm = 60.0 / intervalAvg;
+					m_bpm = (m_bpm * 0.65) + (refinedBpm * 0.35);
+				}
 			}
 		}
 		m_lastBeatTime = timeSeconds;
 	}
+
+	const double beatSmooth = std::exp(-frameDuration / kBeatStrengthSmoothSeconds);
+	m_beatStrength = (m_beatStrength * beatSmooth) + (std::clamp(dynamicStrength, 0.0, 1.0) * (1.0 - beatSmooth));
 }
 
-void MediaAudioAnalyzer::AudioAnalyzer::UpdateSpectral()
+double MediaAudioAnalyzer::AudioAnalyzer::UpdateSpectral()
 {
 	std::vector<std::complex<double>> fft(kFftSize);
 	for (int i = 0; i < kFftSize; ++i)
@@ -1153,11 +1211,13 @@ void MediaAudioAnalyzer::AudioAnalyzer::UpdateSpectral()
 	}
 
 	// 音量に依存しないよう、低域成分を「全体に対する比率」で追跡する。
+	std::vector<double> magnitudes(kFftSize / 2, 0.0);
 	double bassSum = 0.0;
 	double totalSum = 0.0;
-	for (int i = 1; i < 128; ++i)
+	for (int i = 1; i < static_cast<int>(magnitudes.size()); ++i)
 	{
 		double mag = std::abs(fft[i]);
+		magnitudes[i] = mag;
 		totalSum += mag;
 		if (i < 6)
 		{
@@ -1169,6 +1229,20 @@ void MediaAudioAnalyzer::AudioAnalyzer::UpdateSpectral()
 		double bassRatio = bassSum / totalSum;
 		m_bassEnergy = (m_bassEnergy * 0.8) + (bassRatio * 0.2);
 	}
+
+	// スペクトルフラックス（隣接フレーム差分の正の部分）を計算。
+	double flux = 0.0;
+	const double norm = std::max(totalSum, 1e-9);
+	for (size_t i = 0; i < magnitudes.size(); ++i)
+	{
+		const double diff = magnitudes[i] - m_prevMagnitudes[i];
+		if (diff > 0.0)
+		{
+			flux += diff;
+		}
+		m_prevMagnitudes[i] = magnitudes[i];
+	}
+	return flux / norm;
 }
 
 AudioReactiveState MediaAudioAnalyzer::AudioAnalyzer::State() const

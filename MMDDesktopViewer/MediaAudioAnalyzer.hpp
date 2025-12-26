@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 #include <memory>
+#include <deque>
 #include <Windows.h>
 #include <mmeapi.h>
 #include <winrt/base.h>
@@ -67,8 +68,8 @@ private:
 		}
 
 	private:
-		void UpdateBeat(double energy, double timeSeconds);
-		void UpdateSpectral();
+		void UpdateBeat(double energy, double normalizedFlux, double timeSeconds, double frameDuration);
+		double UpdateSpectral();
 
 		double m_energyAvg{ 0.0 };
 		double m_lastBeatTime{ 0.0 };
@@ -81,8 +82,15 @@ private:
 		double m_agcGain{ 1.0 };
 		bool m_lastHadAudio{ false };
 
+		double m_envelopeFast{ 0.0 };
+		double m_envelopeSlow{ 0.0 };
+		double m_fluxAdaptive{ 0.0 };
+		double m_fluxPeak{ 0.0 };
+		std::deque<double> m_recentBeatIntervals;
+
 		std::vector<float> m_fftBuffer;
 		std::vector<float> m_window;
+		std::vector<double> m_prevMagnitudes;
 		size_t m_fftWriteIndex{ 0 };
 	};
 
