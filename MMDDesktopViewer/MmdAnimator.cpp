@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <DirectXMath.h>
 
 namespace
@@ -90,6 +91,7 @@ void MmdAnimator::BeginPoseTransitionFromLastPose()
 	m_transitionElapsed = 0.0;
 	m_transitionActive = true;
 	m_hasTransitionPose = true;
+	m_transitionNeedsInit = true;
 }
 
 bool MmdAnimator::LoadModel(const std::filesystem::path& pmx)
@@ -1002,11 +1004,22 @@ void MmdAnimator::ApplyPoseTransition(double dtSeconds)
 		return;
 	}
 
+	if (m_transitionNeedsInit)
+	{
+		m_transitionDuration = ComputeAdaptiveTransitionDuration(m_transitionPose, m_pose);
+		m_transitionElapsed = 0.0;
+		m_transitionNeedsInit = false;
+		if (m_transitionDuration <= std::numeric_limits<double>::epsilon())
+		{
+			m_transitionActive = false;
+			return;
+		}
+	}
+
+
 	m_transitionElapsed += dtSeconds;
 	float t = static_cast<float>(m_transitionElapsed / m_transitionDuration);
-	float alpha = std::clamp(t, 0.0f, 1.0f);
-	// smoothstep でフェード
-	alpha = alpha * alpha * (3.0f - 2.0f * alpha);
+	float alpha = EvaluateTransitionAlpha(t);
 
 	auto lerp = [](float a, float b, float s)
 		{
@@ -1089,4 +1102,122 @@ void MmdAnimator::ApplyPoseTransition(double dtSeconds)
 	{
 		m_transitionActive = false;
 	}
+}
+
+double MmdAnimator::ComputeAdaptiveTransitionDuration(const BonePose& from, const BonePose& to) const
+{
+	using namespace DirectX;
+
+	float maxTranslation = 0.0f;
+	float maxMorph = 0.0f;
+	float maxRotDeg = 0.0f;
+
+	auto lengthDiff = [](const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b)
+		{
+			float dx = a.x - b.x;
+			float dy = a.y - b.y;
+			float dz = a.z - b.z;
+			return std::sqrt(dx * dx + dy * dy + dz * dz);
+		};
+
+	auto getQuat = [](const std::unordered_map<std::wstring, DirectX::XMFLOAT4>& map, const std::wstring& name)
+		{
+			auto it = map.find(name);
+			if (it != map.end())
+			{
+				return DirectX::XMLoadFloat4(&it->second);
+			}
+			return DirectX::XMQuaternionIdentity();
+		};
+
+	auto accumulateBoneTranslation = [&](const std::wstring& name, const DirectX::XMFLOAT3& target, bool targetIsInTo)
+		{
+			DirectX::XMFLOAT3 source{ 0.0f,0.0f,0.0f };
+			auto it = from.boneTranslations.find(name);
+			if (it != from.boneTranslations.end())
+			{
+				source = it->second;
+			}
+			else if (!targetIsInTo)
+			{
+				return;
+			}
+			maxTranslation = std::max(maxTranslation, lengthDiff(source, target));
+		};
+
+	for (const auto& [name, target] : to.boneTranslations)
+	{
+		accumulateBoneTranslation(name, target, true);
+	}
+	for (const auto& entry : from.boneTranslations)
+	{
+		const auto& name = entry.first;
+		if (to.boneTranslations.find(name) == to.boneTranslations.end())
+		{
+			accumulateBoneTranslation(name, DirectX::XMFLOAT3{}, false);
+		}
+	}
+
+	auto accumulateBoneRotation = [&](const std::wstring& name, XMVECTOR target, bool targetIsInTo)
+		{
+			XMVECTOR source = getQuat(from.boneRotations, name);
+			if (!targetIsInTo && from.boneRotations.find(name) == from.boneRotations.end())
+			{
+				return;
+			}
+			XMVECTOR fromN = XMQuaternionNormalize(source);
+			XMVECTOR toN = XMQuaternionNormalize(target);
+			float dot = std::abs(XMVectorGetX(XMQuaternionDot(fromN, toN)));
+			dot = std::clamp(dot, -1.0f, 1.0f);
+			float angleRad = 2.0f * std::acos(dot);
+			maxRotDeg = std::max(maxRotDeg, XMConvertToDegrees(angleRad));
+		};
+
+	for (const auto& [name, target] : to.boneRotations)
+	{
+		accumulateBoneRotation(name, DirectX::XMLoadFloat4(&target), true);
+	}
+	for (const auto& entry : from.boneRotations)
+	{
+		const auto& name = entry.first;
+		if (to.boneRotations.find(name) == to.boneRotations.end())
+		{
+			accumulateBoneRotation(name, DirectX::XMQuaternionIdentity(), false);
+		}
+	}
+
+	for (const auto& [name, target] : to.morphWeights)
+	{
+		float fromWeight = 0.0f;
+		auto it = from.morphWeights.find(name);
+		if (it != from.morphWeights.end())
+		{
+			fromWeight = it->second;
+		}
+		maxMorph = std::max(maxMorph, std::abs(target - fromWeight));
+	}
+	for (const auto& [name, source] : from.morphWeights)
+	{
+		if (to.morphWeights.find(name) == to.morphWeights.end())
+		{
+			maxMorph = std::max(maxMorph, std::abs(source));
+		}
+	}
+
+	float translationWeight = maxTranslation * 0.5f;
+	float rotationWeight = maxRotDeg / 90.0f;
+	float morphWeight = maxMorph;
+	float dominant = std::max({ translationWeight, rotationWeight, morphWeight });
+
+	const double minDuration = 0.18;
+	const double maxDuration = 1.0;
+	double duration = minDuration + static_cast<double>(dominant) * 0.45;
+	return std::clamp(duration, minDuration, maxDuration);
+}
+
+float MmdAnimator::EvaluateTransitionAlpha(float t) const
+{
+	float alpha = std::clamp(t, 0.0f, 1.0f);
+	// smootherstep で立ち上がりを滑らかにする
+	return alpha * alpha * alpha * (alpha * (alpha * 6.0f - 15.0f) + 10.0f);
 }

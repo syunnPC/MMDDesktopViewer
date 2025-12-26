@@ -183,7 +183,8 @@ private:
 	bool m_hasTransitionPose{ false };
 	bool m_transitionActive{ false };
 	double m_transitionElapsed{ 0.0 };
-	double m_transitionDuration{ 0.25 };
+	double m_transitionDuration{ 0.3 };
+	bool m_transitionNeedsInit{ false };
 
 	void CacheLookAtBones();
 
@@ -206,6 +207,8 @@ private:
 	void ApplySway(float phase, float strength, float motionScale);
 	void ApplyPoseTransition(double dtSeconds);
 	void BeginPoseTransitionFromLastPose();
+	double ComputeAdaptiveTransitionDuration(const BonePose& from, const BonePose& to) const;
+	float EvaluateTransitionAlpha(float t) const;
 
 	bool m_audioReactiveEnabled{ false };
 	AudioReactiveState m_audioState{};
